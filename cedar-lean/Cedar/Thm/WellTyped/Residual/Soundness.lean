@@ -622,8 +622,20 @@ theorem residual_well_typed_is_sound_call
 (h₂ : (Residual.call xfn args ty).evaluate request entities = Except.ok v) :
 InstanceOfType env v (Residual.call xfn args ty).typeOf
 := by
+  by_cases hif : xfn = .ifError ∧ ∃ x₁ x₂, args = [x₁, x₂]
+  · -- `iferror` yields a boolean by construction
+    obtain ⟨hxfn, x₁, x₂, hxs⟩ := hif
+    subst hxfn hxs
+    cases h₁
+    simp only [Residual.evaluate, bind, Except.bind] at h₂
+    split at h₂ <;> simp only [Except.ok.injEq, reduceCtorEq] at h₂
+    rename_i heq
+    split at heq <;> simp only [pure, Except.pure, Except.ok.injEq, reduceCtorEq] at heq
+    subst h₂ heq
+    simp only [Residual.typeOf]
+    exact bool_is_instance_of_anyBool _
+  rw [Residual.evaluate.eq_16 _ _ _ _ _ (fun x₁ x₂ h₁' h₂' => hif ⟨h₁', x₁, x₂, h₂'⟩)] at h₂
   generalize hᵢ : (args.mapM₁ (fun ⟨x₁, _⟩ => Residual.evaluate x₁ request entities)) = res₁
-  simp only [Residual.evaluate] at h₂
   cases res₁ <;> simp [hᵢ] at h₂
   simp only [Cedar.Spec.call, Cedar.Spec.res, gt_iff_lt, ge_iff_le] at h₂
   simp only [Residual.typeOf]

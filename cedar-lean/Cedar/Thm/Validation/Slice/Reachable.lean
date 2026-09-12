@@ -133,7 +133,17 @@ theorem call_not_euid_via_path {xfn : ExtFun} {xs : List Expr} {entities : Entit
   ¬ Value.EuidViaPath v path euid
 := by
   intro ha
-  simp only [evaluate] at he
+  by_cases hif : xfn = .ifError ∧ ∃ x₁ x₂, xs = [x₁, x₂]
+  · -- `iferror` yields a boolean, never an entity
+    obtain ⟨hxfn, x₁, x₂, hxs⟩ := hif
+    subst hxfn hxs
+    simp only [evaluate, bind, Except.bind] at he
+    split at he <;> simp only [Except.ok.injEq, reduceCtorEq] at he
+    rename_i heq
+    split at heq <;> simp only [pure, Except.pure, Except.ok.injEq, reduceCtorEq] at heq
+    subst he heq
+    cases ha
+  rw [evaluate.eq_16 _ _ _ _ (fun x₁ x₂ h₁ h₂ => hif ⟨h₁, x₁, x₂, h₂⟩)] at he
   cases he₁ : xs.mapM₁ fun x => evaluate x.val request entities <;>
     simp only [he₁, Except.bind_err, reduceCtorEq] at he
 

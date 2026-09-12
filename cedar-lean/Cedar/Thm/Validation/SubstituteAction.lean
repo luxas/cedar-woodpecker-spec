@@ -207,15 +207,45 @@ theorem substitute_action_preserves_evaluation_call {xfn : ExtFun} {xs : List Ex
     have h₁ := ih₁ h
     simp only [h₀, List.mem_cons, true_or, true_implies] at h₁
     rw [substitute_action_cons_call]
-    simp only [evaluate, List.mapM₁_eq_mapM (evaluate · request entities)]
-    simp only [List.mapM_cons, bind_assoc, pure_bind]
-    rw [h₁]
-    simp only [List.mapM_map, Function.comp_def]
     have h₂ : ∀ (x₁ : Expr), x₁ ∈ t → SubstituteActionPreservesEvaluation x₁ request entities :=
     by
       simp only [h₀, List.mem_cons, forall_eq_or_imp] at ih₁
       exact ih₁.right
-    rw [List.mapM_congr h₂]
+    by_cases hif : xfn = .ifError ∧ ∃ x₂, t = [x₂]
+    · -- `iferror` is lazy: substitute in each argument directly
+      obtain ⟨hxfn, x₂, ht⟩ := hif
+      subst hxfn ht
+      have h₃ := h₂ x₂ (by simp)
+      simp only [SubstituteActionPreservesEvaluation] at h₃
+      simp only [List.map_cons, List.map_nil, evaluate, h₁, h₃]
+    · have hshape : ∀ {α} (a : α) (l : List α) (y₁ y₂ : α), a :: l = [y₁, y₂] → ∃ b, l = [b] := by
+        intro α a l y₁ y₂ hl
+        cases l with
+        | nil => simp at hl
+        | cons b rest =>
+          cases rest with
+          | nil => exact ⟨b, rfl⟩
+          | cons _ _ => simp at hl
+      have hne₁ : ∀ y₁ y₂, xfn = .ifError →
+          (substituteAction request.action h :: t.map (substituteAction request.action)) = [y₁, y₂] → False := by
+        intro y₁ y₂ hx hl
+        obtain ⟨b, hb⟩ := hshape _ _ _ _ hl
+        cases t with
+        | nil => simp at hb
+        | cons a rest =>
+          cases rest with
+          | nil => exact hif ⟨hx, a, rfl⟩
+          | cons _ _ => simp at hb
+      have hne₂ : ∀ y₁ y₂, xfn = .ifError → (h :: t) = [y₁, y₂] → False := by
+        intro y₁ y₂ hx hl
+        obtain ⟨b, hb⟩ := hshape _ _ _ _ hl
+        exact hif ⟨hx, b, hb⟩
+      rw [evaluate.eq_16 _ _ _ _ hne₁, evaluate.eq_16 _ _ _ _ hne₂]
+      simp only [List.mapM₁_eq_mapM (evaluate · request entities)]
+      simp only [List.mapM_cons, bind_assoc, pure_bind]
+      rw [h₁]
+      simp only [List.mapM_map, Function.comp_def]
+      rw [List.mapM_congr h₂]
 
 theorem substitute_action_preserves_evaluation (expr : Expr) (request : Request) (entities : Entities) :
   evaluate (substituteAction request.action expr) request entities =

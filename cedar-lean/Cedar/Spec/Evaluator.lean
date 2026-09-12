@@ -131,10 +131,39 @@ public def evaluate (x : Expr) (req : Request) (es : Entities) : Result Value :=
   | .record axs      => do
     let avs ← axs.mapM₂ (fun ⟨(a₁, x₁), _⟩ => bindAttr a₁ (evaluate x₁ req es))
     .ok (Map.make avs)
+  -- `iferror(e, d)` coalesces `e`'s error into `d`'s boolean: `e`'s boolean
+  -- when it succeeds (`d` is not evaluated), `d`'s boolean (or `d`'s own
+  -- error) when `e` errors, and a type error when `e` is not a boolean. An
+  -- extension function receives evaluated arguments, so this cannot live in
+  -- `call`.
+  | .call .ifError [x₁, x₂] => do
+    let r := match evaluate x₁ req es with
+      | .error _ => evaluate x₂ req es
+      | r => r
+    let b ← r.as Bool
+    .ok b
   | .call xfn xs     => do
     let vs ← xs.mapM₁ (fun ⟨x₁, _⟩ => evaluate x₁ req es)
     call xfn vs
 
 end
+
+/-- The strict equation of `evaluate` on a call that is not `iferror`. -/
+public theorem evaluate_call_ne {xfn : ExtFun} (xs : List Expr) (req : Request) (es : Entities)
+  (hne : xfn ≠ .ifError) :
+  evaluate (Expr.call xfn xs) req es =
+    (do
+      let vs ← xs.mapM₁ (fun ⟨x₁, _⟩ => evaluate x₁ req es)
+      call xfn vs)
+:= evaluate.eq_16 req es xfn xs (fun _ _ h _ => hne h)
+
+/-- The strict equation of `evaluate` on a call with other than two arguments. -/
+public theorem evaluate_call_arity {xfn : ExtFun} (xs : List Expr) (req : Request) (es : Entities)
+  (hne : ∀ x₁ x₂, xs ≠ [x₁, x₂]) :
+  evaluate (Expr.call xfn xs) req es =
+    (do
+      let vs ← xs.mapM₁ (fun ⟨x₁, _⟩ => evaluate x₁ req es)
+      call xfn vs)
+:= evaluate.eq_16 req es xfn xs (fun x₁ x₂ _ h => hne x₁ x₂ h)
 
 end Cedar.Spec

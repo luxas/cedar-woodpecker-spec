@@ -1416,6 +1416,32 @@ theorem compile_well_typed_call
     · simp [hty_comp_x1, hty_x1, TermType.ofType]
     · simp
     · simp
+  -- `iferror`: `ite (isNone e) d e` over two `Option Bool` terms
+  case ifError =>
+    rename_i x1 x2 _ _ hty_x1 hty_x2 _
+    have ⟨tcomp_x1, hcomp_x1, hty_comp_x1⟩ := ihxs x1 ?_
+    have ⟨hwf_comp_x1, _⟩ := compile_wf ((hcond_xs x1 ?_).2.2) hcomp_x1
+    have ⟨tcomp_x2, hcomp_x2, hty_comp_x2⟩ := ihxs x2 ?_
+    have ⟨hwf_comp_x2, _⟩ := compile_wf ((hcond_xs x2 ?_).2.2) hcomp_x2
+    any_goals simp only [List.mem_cons, List.not_mem_nil, or_false, or_true, true_or]
+    have hcomp_xs : tcomp_xs = [tcomp_x1, tcomp_x2]
+    := by
+      simp only [
+        List.attach_map, List.map_cons, List.map_nil, List.attach_cons,
+        List.attach_nil, List.mapM_cons,
+        bind, Except.bind, List.mapM_nil,
+        pure, Except.pure,
+      ] at hcomp_xs
+      simp only [hcomp_x1, hcomp_x2, Except.ok.injEq] at hcomp_xs
+      simp [hcomp_xs]
+    have hty₁ : tcomp_x1.typeOf = .option .bool := by
+      simp [hty_comp_x1, hty_x1, TermType.ofType]
+    have hty₂ : tcomp_x2.typeOf = .option .bool := by
+      simp [hty_comp_x2, hty_x2, TermType.ofType]
+    simp only [hcomp_xs, compileIfError, hty₁, hty₂, and_self, ↓reduceIte, Except.ok.injEq,
+      exists_eq_left', TypedExpr.typeOf, TermType.ofType]
+    have hn := wf_isNone hwf_comp_x1
+    exact (wf_ite hn.left hwf_comp_x2 hwf_comp_x1 hn.right (hty₂.trans hty₁.symm)).right.trans hty₂
   -- Resolve cases compiled with compileCall₂
   case
     lessThan x1 x2 hty_x1 hty_x2 _ |

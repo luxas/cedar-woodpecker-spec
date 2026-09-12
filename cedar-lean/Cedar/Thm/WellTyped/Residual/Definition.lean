@@ -195,6 +195,10 @@ inductive ExtResidualWellTyped : ExtFun → List Residual → CedarType → Prop
   | toDays {x₁ : Residual}
     (h₁ : x₁.typeOf = .ext .duration) :
     ExtResidualWellTyped .toDays [x₁] .int
+  | ifError {x₁ x₂ : Residual} {bty₁ bty₂ : BoolType}
+    (h₁ : x₁.typeOf = .bool bty₁)
+    (h₂ : x₂.typeOf = .bool bty₂) :
+    ExtResidualWellTyped .ifError [x₁, x₂] (.bool .anyBool)
 
 
 end Cedar.Spec

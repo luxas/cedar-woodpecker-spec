@@ -439,6 +439,6 @@ theorem type_of_preserves_evaluation_results {e : Expr} {c₁ c₂ : Capabilitie
     rcases h₃ with ⟨tys, h₃₁, h₃₂⟩
     simp [List.mapM₁_eq_mapM fun x => justType (typeOf x c₁ env), List.mapM_ok_iff_forall₂] at h₃₁
     have h₄ := type_of_ok_list h₃₁ (λ x₁ h => hᵢ x₁ h h₁)
-    exact type_of_preserves_evaluation_results_call h₃₂ (List.forall₂_implies_mapM_eq _ _ h₄)
+    exact type_of_preserves_evaluation_results_call h₃₂ h₄
 
 end Cedar.Thm

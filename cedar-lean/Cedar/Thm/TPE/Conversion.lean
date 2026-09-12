@@ -148,9 +148,35 @@ theorem conversion_preserves_evaluation (te : TypedExpr) (req : Request) (es : E
     rw [List.forall₂_implies_mapM_eq]
     apply conversion_preserves_evaluation_forall2_map
   | call xfn args ty =>
-    simp [TypedExpr.toExpr, TypedExpr.toResidual, Spec.evaluate, Residual.evaluate]
+    by_cases hif : xfn = .ifError ∧ ∃ a b, args = [a, b]
+    · -- `iferror` is lazy on both sides; convert each argument (the
+      -- element-wise facts come from the list lemma, keeping the recursion
+      -- structural)
+      have hall := conversion_preserves_evaluation_forall2 (ls := args) (req := req) (es := es)
+      obtain ⟨hxfn, a, b, hargs⟩ := hif
+      subst hxfn hargs
+      cases hall with
+      | cons iha hrest =>
+        cases hrest with
+        | cons ihb _ =>
+      simp only [TypedExpr.toExpr, TypedExpr.toResidual, List.map₁_eq_map, List.map_cons,
+        List.map_nil, Spec.evaluate, Residual.evaluate, iha, ihb]
+      rfl
+    have hshape : ∀ {β} (f : TypedExpr → β) (y₁ y₂ : β), args.map f = [y₁, y₂] → ∃ a b, args = [a, b] := by
+      intro β f y₁ y₂ h
+      match args, h with
+      | [a, b], _ => exact ⟨a, b, rfl⟩
+      | [], h => simp at h
+      | [_], h => simp at h
+      | _ :: _ :: _ :: _, h => simp at h
+    simp only [TypedExpr.toExpr, TypedExpr.toResidual, List.map₁_eq_map]
+    rw [Spec.evaluate.eq_16 _ _ _ _ (fun y₁ y₂ h₁ h₂ => by
+          obtain ⟨a, b, hab⟩ := hshape _ y₁ y₂ h₂
+          exact hif ⟨h₁, a, b, hab⟩),
+        Residual.evaluate.eq_16 _ _ _ _ _ (fun y₁ y₂ h₁ h₂ => by
+          obtain ⟨a, b, hab⟩ := hshape _ y₁ y₂ h₂
+          exact hif ⟨h₁, a, b, hab⟩)]
     congr 1
-    rw [List.map₁_eq_map, List.map₁_eq_map]
     rw [List.mapM₁_eq_mapM (Spec.evaluate · req es), List.mapM₁_eq_mapM (Residual.evaluate · req es)]
     rw [List.mapM_map, List.mapM_map]
     rw [List.forall₂_implies_mapM_eq]
@@ -495,6 +521,12 @@ theorem conversion_preserves_typedness:
           simp [TypedExpr.toResidual]
           apply ExtResidualWellTyped.decimal
           exact h₂
+        | ifError h₂ h₃ =>
+          apply ExtResidualWellTyped.ifError
+          · rw [←conversion_preserves_typeof]
+            exact h₂
+          · rw [←conversion_preserves_typeof]
+            exact h₃
         | lessThan h₂ h₃ =>
           apply ExtResidualWellTyped.lessThan
           · rw [←conversion_preserves_typeof]

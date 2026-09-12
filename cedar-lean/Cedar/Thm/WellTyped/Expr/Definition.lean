@@ -216,6 +216,10 @@ public inductive ExtFun.WellTyped : ExtFun → List TypedExpr → CedarType → 
   | toDays {x₁ : TypedExpr}
     (h₁ : x₁.typeOf = .ext .duration) :
     WellTyped .toDays [x₁] .int
+  | ifError {x₁ x₂ : TypedExpr} {bty₁ bty₂ : BoolType}
+    (h₁ : x₁.typeOf = .bool bty₁)
+    (h₂ : x₂.typeOf = .bool bty₂) :
+    WellTyped .ifError [x₁, x₂] (.bool .anyBool)
 
 end Cedar.Spec
 

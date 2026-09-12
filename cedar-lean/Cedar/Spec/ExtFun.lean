@@ -50,6 +50,7 @@ public inductive ExtFun where
   | toMinutes
   | toHours
   | toDays
+  | ifError             ----- Error handling -----
 
 @[expose]
 public def res {α} [Coe α Ext] : Option α → Result Value
@@ -87,6 +88,9 @@ public def call : ExtFun → List Value → Result Value
   | .toMinutes, [.ext (.duration dur)]          => .ok dur.toMinutes
   | .toHours, [.ext (.duration dur)]            => .ok dur.toHours
   | .toDays , [.ext (.duration dur)]            => .ok dur.toDays
+  -- `iferror`'s strict body, reached only when both arguments evaluated
+  -- without error (`evaluate` handles the error path itself): the first.
+  | .ifError, [.prim (.bool b), .prim (.bool _)] => .ok b
   | _, _                                        => .error .typeError
 
 ----- Derivations -----

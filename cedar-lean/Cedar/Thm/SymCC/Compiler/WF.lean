@@ -695,6 +695,18 @@ public theorem compileCall_wf_types {f : ExtFun} {ts : List Term} {εs : SymEnti
   | _                => t.typeOf = .option .bool
 := by
   cases f <;> simp only
+  case ifError =>
+    simp only [compileCall] at hok
+    split at hok <;> simp only [reduceCtorEq] at *
+    rename_i t₁ t₂ _
+    simp only [compileIfError] at hok
+    split at hok <;> simp only [Except.ok.injEq, reduceCtorEq] at hok
+    rename_i hty
+    subst hok
+    replace hwf := wf_args' hwf
+    have hn := wf_isNone hwf.left
+    have hi := wf_ite hn.left hwf.right hwf.left hn.right (hty.right.trans hty.left.symm)
+    simp only [hi.left, hi.right, hty.right, and_self]
   case decimal =>
     simp_compileCall₀_wf hok compileCall_decimal_ok_implies typeOf_term_prim_ext_decimal
   case lessThan =>
@@ -1065,7 +1077,17 @@ private theorem evaluate_call_wf {xfn : ExtFun} {xs : List Expr} {env : Env} {v 
   (hok : evaluate (Expr.call xfn xs) env.request env.entities = Except.ok v) :
   Value.WellFormed env.entities v
 := by
-  rw [evaluate.eq_def] at hok
+  by_cases hif : xfn = .ifError ∧ ∃ x₁ x₂, xs = [x₁, x₂]
+  · -- `iferror` yields a boolean by construction
+    obtain ⟨hxfn, x₁, x₂, hxs⟩ := hif
+    subst hxfn hxs
+    simp only [evaluate, bind, Except.bind] at hok
+    split at hok <;> simp only [Except.ok.injEq, reduceCtorEq] at hok
+    rename_i heq
+    split at heq <;> simp only [pure, Except.pure, Except.ok.injEq, reduceCtorEq] at heq
+    subst hok heq
+    exact value_bool_wf
+  rw [evaluate.eq_16 _ _ _ _ (fun x₁ x₂ h₁ h₂ => hif ⟨h₁, x₁, x₂, h₂⟩)] at hok
   simp_do_let (List.mapM₁ xs fun x => evaluate x.val env.request env.entities) at hok
   simp only [call] at hok
   split at hok <;> (try simp only [Except.ok.injEq, reduceCtorEq] at hok)

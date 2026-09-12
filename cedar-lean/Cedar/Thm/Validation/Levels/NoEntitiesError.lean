@@ -580,6 +580,33 @@ theorem level_based_no_dne_set {xs : List Expr} {n : Nat} {c₀ c₁ : Capabilit
   replace ⟨ tx', _, htxs, htxe, _ ⟩ := ht x hx
   exact (ih x hx (n := n) hc hr hcl htxe (hl tx' htxs)) hxe
 
+/-- `iferror(e, d)` yields a boolean, `d`'s error, or a type error — never an
+`entityDoesNotExist` that `d` did not produce (`e`'s errors are caught). -/
+private theorem ifError_ne_dne {x₁ x₂ : Expr} {request : Request} {entities : Entities}
+  (h₂ : evaluate x₂ request entities ≠ .error .entityDoesNotExist) :
+  evaluate (.call .ifError [x₁, x₂]) request entities ≠ .error .entityDoesNotExist
+:= by
+  have hr : (match evaluate x₁ request entities with
+      | .error _ => evaluate x₂ request entities
+      | r => r) ≠ .error .entityDoesNotExist := by
+    cases hx₁ : evaluate x₁ request entities with
+    | error e => simpa using h₂
+    | ok v => simp
+  have hb := as_bool_ne_dne hr
+  simp only [evaluate, bind, Except.bind]
+  intro heq
+  split at heq
+  · rename_i err heq'
+    simp only [Except.error.injEq] at heq
+    subst heq
+    split at heq'
+    · rename_i e' heq''
+      simp only [Except.error.injEq] at heq'
+      subst heq'
+      exact hb heq''
+    · simp [pure, Except.pure] at heq'
+  · simp at heq
+
 theorem level_based_no_dne_call {xfn : ExtFun} {xs : List Expr} {n : Nat} {c₀ c₁ : Capabilities} {env : TypeEnv} {request : Request} {entities : Entities}
   (hc : CapabilitiesInvariant c₀ request entities)
   (hr : InstanceOfWellFormedEnvironment request entities env)
@@ -593,7 +620,16 @@ theorem level_based_no_dne_call {xfn : ExtFun} {xs : List Expr} {n : Nat} {c₀ 
   subst tx
   cases hl
   rename_i hl
-  simp only [evaluate, xs.mapM₁_eq_mapM (evaluate · request entities)]
+  by_cases hif : xfn = .ifError ∧ ∃ x₁ x₂, xs = [x₁, x₂]
+  · obtain ⟨hxfn, x₁, x₂, hxs⟩ := hif
+    subst hxfn hxs
+    have hx : ∀ x ∈ [x₁, x₂], evaluate x request entities ≠ .error .entityDoesNotExist := by
+      intro x hx
+      replace ⟨ tx', htxs, c', htxe ⟩ := List.forall₂_implies_all_left ht x hx
+      exact (ih x hx (n := n) hc hr hcl htxe (hl tx' htxs))
+    exact ifError_ne_dne (hx x₂ (by simp))
+  rw [evaluate.eq_16 _ _ _ _ (fun x₁ x₂ h₁ h₂ => hif ⟨h₁, x₁, x₂, h₂⟩)]
+  simp only [xs.mapM₁_eq_mapM (evaluate · request entities)]
   apply bind_ne_error _ (fun vs _ => by
     unfold Cedar.Spec.call
     split <;> first | (simp ; done) | (unfold Cedar.Spec.res ; split <;> simp))

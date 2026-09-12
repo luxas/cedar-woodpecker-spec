@@ -818,6 +818,25 @@ theorem compileCall_duration_toDays_ok_implies {ts : List Term} {t : Term} :
     t = ifSome t₁ (Term.some (Duration.toDays (option.get t₁)))
 := by simp_compileCall₁
 
+theorem compileCall_ifError_ok_implies {ts : List Term} {t : Term} :
+  compileCall ExtFun.ifError ts = .ok t →
+  ∃ t₁ t₂,
+    ts = [t₁, t₂] ∧
+    t₁.typeOf = .option .bool ∧
+    t₂.typeOf = .option .bool ∧
+    t = ite (isNone t₁) t₂ t₁
+:= by
+  intro hok
+  unfold compileCall at hok
+  split at hok <;> simp only [List.cons.injEq, and_true, reduceCtorEq] at *
+  rename_i t₁ t₂ _
+  exists t₁, t₂
+  simp only [and_self, true_and]
+  simp only [compileIfError] at hok
+  split at hok <;> simp only [Except.ok.injEq, reduceCtorEq] at hok
+  rename_i hty
+  simp only [hty, hok, and_self]
+
 theorem compile_call_ok_implies {f : ExtFun} {xs : List Expr} {εnv : SymEnv} {t : Term}
   (hok : compile (.call f xs) εnv = .ok t) :
   ∃ ts,

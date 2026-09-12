@@ -186,7 +186,14 @@ private theorem partial_eval_preserves_typeof_call {xfn : ExtFun} {args : List R
   PEPreservesTypeOf (Residual.call xfn args ty)
 := by
   intro env h_wt preq pes
-  simp only [TPE.evaluate, TPE.call]
+  by_cases hif : xfn = .ifError ∧ ∃ x₁ x₂, args = [x₁, x₂]
+  · -- `iferror`: every branch carries the call's type
+    obtain ⟨hxfn, x₁, x₂, hxs⟩ := hif
+    subst hxfn hxs
+    simp only [TPE.evaluate]
+    split <;> (try split) <;> (try split) <;> simp [Residual.typeOf]
+  rw [Cedar.TPE.evaluate.eq_14 _ _ _ _ _ (fun x₁ x₂ h₁ h₂ => hif ⟨h₁, x₁, x₂, h₂⟩)]
+  simp only [TPE.call]
   split
   · simp only [someOrError]
     split

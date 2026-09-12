@@ -153,6 +153,7 @@ pub enum ExtFun {
     ToMinutes,
     ToHours,
     ToDays,
+    IfError,
 }
 
 /// Lean TPE Residual: mirrors `Cedar.TPE.Residual`
@@ -394,6 +395,7 @@ mod convert {
                     ExtFun::IsInRange => pst::BinaryOp::IsInRange,
                     ExtFun::Offset => pst::BinaryOp::Offset,
                     ExtFun::DurationSince => pst::BinaryOp::DurationSince,
+                    ExtFun::IfError => pst::BinaryOp::IfError,
                     _ => return Err(ResidualConversionError::UnsupportedExtArity(2)),
                 };
                 let mut it = pst_args.into_iter();

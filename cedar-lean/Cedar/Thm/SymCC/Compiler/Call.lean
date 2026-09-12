@@ -964,6 +964,24 @@ private theorem compileCall_interpret_duration_toDays {εs : SymEntities} {I : I
     Duration.toDays compileCall_duration_toDays_ok_implies
     wf_duration_toDays interpret_duration_toDays
 
+private theorem compileCall_interpret_ifError {εs : SymEntities} {I : Interpretation} {ts : List Term} {t : Term}
+  (hI  : I.WellFormed εs)
+  (hwφ : ∀ (t : Term), t ∈ ts → Term.WellFormed εs t)
+  (hok : compileCall ExtFun.ifError ts = Except.ok t) :
+  compileCall ExtFun.ifError (List.map (Term.interpret I) ts) = Except.ok (Term.interpret I t)
+:= by
+  replace ⟨t₁, t₂, hts, hty₁, hty₂, hok⟩ := compileCall_ifError_ok_implies hok
+  subst hok hts
+  replace hwφ := wf_args' hwφ
+  have hwφ₁' := interpret_term_wfl hI hwφ.left
+  have hwφ₂' := interpret_term_wfl hI hwφ.right
+  simp only [hty₁, hty₂] at hwφ₁' hwφ₂'
+  simp only [compileCall, compileIfError, hwφ₁'.right, hwφ₂'.right, List.map_cons, List.map_nil,
+    and_self, ↓reduceIte, Except.ok.injEq]
+  have hn := wf_isNone hwφ.left
+  rw [interpret_ite hI hn.left hwφ.right hwφ.left hn.right (hty₂.trans hty₁.symm),
+    interpret_isNone hI hwφ.left]
+
 theorem compileCall_interpret {xfn : ExtFun} {ts : List Term} {t : Term} {I : Interpretation}
   (hI  : I.WellFormed εs)
   (hwφ : ∀ (t : Term), t ∈ ts → Term.WellFormed εs t)
@@ -993,6 +1011,7 @@ theorem compileCall_interpret {xfn : ExtFun} {ts : List Term} {t : Term} {I : In
   case toMinutes          => exact compileCall_interpret_duration_toMinutes hI hwφ hok
   case toHours            => exact compileCall_interpret_duration_toHours hI hwφ hok
   case toDays             => exact compileCall_interpret_duration_toDays hI hwφ hok
+  case ifError            => exact compileCall_interpret_ifError hI hwφ hok
 
 theorem compile_interpret_call {f : ExtFun} {xs : List Expr} {εnv : SymEnv} {I : Interpretation} {t : Term}
   (hI  : I.WellFormed εnv.entities)
@@ -1376,6 +1395,60 @@ private theorem compile_evaluate_call_duration_toDays {xs : List Expr} {ts : Lis
   simp_compileCall₁_evaluate env hwφ ih hok compileCall_duration_toDays_ok_implies
     wfl_of_type_ext_duration_is_ext_duration pe_duration_toDays
 
+/-- `iferror(e, d)` is `d` where `e` is `none` and `e` otherwise: the symbolic
+`ite (isNone e) d e` tracks the lazy concrete semantics because terms are
+pure — `d`'s own `none` shows only where it is selected. -/
+private theorem compile_evaluate_call_ifError {xs : List Expr} {ts : List Term} {env : Env} {εnv : SymEnv} {t : Term}
+  (hwφ : ∀ (t : Term), t ∈ ts → Term.WellFormed εnv.entities t)
+  (ih  : List.Forall₂ (λ x t => evaluate x env.request env.entities ∼ t) xs ts)
+  (hok : compileCall ExtFun.ifError ts = Except.ok t) :
+  evaluate (.call .ifError xs) env.request env.entities ∼ t
+:= by
+  replace ⟨t₁, t₂, hts, hty₁, hty₂, hok⟩ := compileCall_ifError_ok_implies hok
+  subst hok hts
+  replace hwφ := wf_args' hwφ
+  replace ⟨x₁, x₂, h₁, h₂, ih⟩ := List.forall₂_pair_right_iff.mp ih
+  subst ih
+  simp only [evaluate]
+  cases h₃ : (evaluate x₁ env.request env.entities) with
+  | error e₁ =>
+    simp only [h₃] at h₁
+    replace ⟨hne₁, ty₁, h₁⟩ := same_error_implies h₁
+    subst h₁
+    simp only [pe_isNone_none, pe_ite_true]
+    cases h₄ : (evaluate x₂ env.request env.entities) with
+    | error e₂ =>
+      simp only [h₄] at h₂
+      replace ⟨hne₂, ty₂, h₂⟩ := same_error_implies h₂
+      subst h₂
+      simp only [Result.as, bind, Except.bind]
+      exact same_error_implied_by hne₂
+    | ok v₂ =>
+      simp only [h₄] at h₂
+      replace ⟨t₂', ht₂, h₂⟩ := same_ok_implies h₂
+      subst ht₂
+      simp only [typeOf_term_some, TermType.option.injEq] at hty₂
+      have ⟨b₂, hb₂⟩ := wfl_of_type_bool_is_bool
+        (And.intro (wf_term_some_implies hwφ.right) (same_value_implies_lit h₂)) hty₂
+      subst hb₂
+      replace h₂ := same_bool_term_implies h₂
+      subst h₂
+      simp only [Result.as, Coe.coe, Value.asBool, bind, Except.bind, pure, Except.pure]
+      exact same_ok_bool
+  | ok v₁ =>
+    simp only [h₃] at h₁
+    replace ⟨t₁', ht₁, h₁⟩ := same_ok_implies h₁
+    subst ht₁
+    simp only [pe_isNone_some, pe_ite_false]
+    simp only [typeOf_term_some, TermType.option.injEq] at hty₁
+    have ⟨b₁, hb₁⟩ := wfl_of_type_bool_is_bool
+      (And.intro (wf_term_some_implies hwφ.left) (same_value_implies_lit h₁)) hty₁
+    subst hb₁
+    replace h₁ := same_bool_term_implies h₁
+    subst h₁
+    simp only [Result.as, Coe.coe, Value.asBool, bind, Except.bind, pure, Except.pure]
+    exact same_ok_bool
+
 theorem compile_evaluate_call {f : ExtFun} {xs : List Expr} {env : Env} {εnv : SymEnv} {t : Term}
   (heq : env ∼ εnv)
   (hwe : env.WellFormedFor (.call f xs))
@@ -1388,8 +1461,13 @@ theorem compile_evaluate_call {f : ExtFun} {xs : List Expr} {env : Env} {εnv : 
   replace hwε := wf_εnv_for_call_implies hwε
   have hwφ := compile_wfs hwε hok₂
   replace ih := compile_evaluate_ihs heq (wf_env_for_call_implies hwe) hwε ih hok₂
-  simp only [evaluate, List.mapM₁_eq_mapM (evaluate · env.request env.entities)]
+  by_cases hif : f = .ifError
+  · subst hif
+    exact compile_evaluate_call_ifError hwφ ih hok
+  rw [evaluate_call_ne _ _ _ hif]
+  simp only [List.mapM₁_eq_mapM (evaluate · env.request env.entities)]
   cases f
+  case ifError => exact absurd rfl hif
   case decimal =>
     exact compile_evaluate_call_decimal ih hok
   case lessThan =>

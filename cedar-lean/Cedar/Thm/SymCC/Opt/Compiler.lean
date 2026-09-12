@@ -279,6 +279,13 @@ private theorem Opt.compileCall.correctness (xfn : ExtFun) (ress : List Opt.Comp
     rw [List.mapUnion_singleton (by apply hwf res (by simp))]
   · rename_i res ; simp_do_let SymCC.compileCall₁ _ Duration.toDays res.term
     rw [List.mapUnion_singleton (by apply hwf res (by simp))]
+  · -- `iferror`: the same term, the footprints unioned
+    rename_i res₁ res₂
+    simp only [SymCC.compileIfError, Opt.compileIfError]
+    split
+    · simp only [bind, Except.bind, Except.ok.injEq, Opt.CompileResult.mk.injEq, true_and]
+      rw [List.mapUnion_cons hwf, List.mapUnion_singleton (by apply hwf res₂ (by simp))]
+    · rfl
   · rw [do_error]
     split <;> simp_all
     all_goals {
@@ -335,6 +342,18 @@ private theorem Opt.compileCallWithError₂_footprint_wf {xty₁ xty₂ : ExtTyp
   res.footprint.WellFormed
 := by
   simp [Opt.compileCallWithError₂]
+  split <;> simp
+  intro h ; subst res ; simp [Data.Set.union_wf]
+
+/--
+Helper lemma that `Opt.compileIfError` produces a well-formed footprint set
+(the union of its arguments').
+-/
+private theorem Opt.compileIfError_footprint_wf {arg₁ arg₂ res : Opt.CompileResult} :
+  Opt.compileIfError arg₁ arg₂ = .ok res →
+  res.footprint.WellFormed
+:= by
+  simp [Opt.compileIfError]
   split <;> simp
   intro h ; subst res ; simp [Data.Set.union_wf]
 
@@ -606,6 +625,7 @@ theorem Opt.compile_footprint_wf {x : Expr} {εnv : SymEnv} {res : Opt.CompileRe
         rename_i res'
         have ⟨arg, harg, h₁⟩ := hress res' (by simp)
         exact Opt.compile_footprint_wf h₁
+      · exact Opt.compileIfError_footprint_wf
       · simp
 
 /--

@@ -328,6 +328,14 @@ def compileCallWithError₂ (xty₁ xty₂ : ExtType) (enc : Term → Term → T
 def compileCall₂ (xty : ExtType) (enc : Term → Term → Term) (arg₁ arg₂ : CompileResult) : Result CompileResult :=
   compileCallWithError₂ xty xty (λ t₁ t₂ => ⊙ enc t₁ t₂) arg₁ arg₂
 
+/-- Symbolic `iferror(e, d)` (see `SymCC.compileIfError`); the footprints are
+unioned. -/
+def compileIfError (arg₁ arg₂ : CompileResult) : Result CompileResult :=
+  if arg₁.term.typeOf = .option .bool ∧ arg₂.term.typeOf = .option .bool
+  then .ok { term := ite (isNone arg₁.term) arg₂.term arg₁.term,
+             footprint := arg₁.footprint ∪ arg₂.footprint }
+  else .error .typeError
+
 def compileCall (xfn : ExtFun) (args : List CompileResult) : Result CompileResult := do
   match xfn, args with
   | .decimal, [t₁]                => compileCall₀ Ext.Decimal.decimal t₁
@@ -352,6 +360,7 @@ def compileCall (xfn : ExtFun) (args : List CompileResult) : Result CompileResul
   | .toMinutes, [t₁]              => compileCall₁ .duration Duration.toMinutes t₁
   | .toHours, [t₁]                => compileCall₁ .duration Duration.toHours t₁
   | .toDays, [t₁]                 => compileCall₁ .duration Duration.toDays t₁
+  | .ifError, [t₁, t₂]            => compileIfError t₁ t₂
   | _, _                          => .error .typeError
 
 /--

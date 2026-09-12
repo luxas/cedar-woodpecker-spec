@@ -190,6 +190,7 @@ def extFunOf (n : Spec.Proto.Name) : Except String ExtFun :=
   | "toMinutes"          => .ok .toMinutes
   | "toHours"            => .ok .toHours
   | "toDays"             => .ok .toDays
+  | "iferror"            => .ok .ifError
   | _                    => .error s!"unknown extension function {n.toName}"
 
 /--
