@@ -25,6 +25,7 @@ import Cedar.SymCCOpt.Verifier
 import CedarProto
 import Cedar.DNF
 import Cedar.DNF.Split
+import Cedar.DNF.Elim
 import Cedar.DNF.Like
 import Cedar.TPE
 import Cedar.TPE.Authorizer
@@ -1050,6 +1051,33 @@ private def checkSplit (req : Cedar.DNF.Proto.SplitCheckRequest) : CheckResult :
     let req ← ((@Proto.Message.interpret? Cedar.DNF.Proto.SplitCheckRequest) req
       |>.mapError (s!"failed to parse input: {·}") : Except String _)
     runAndTime (λ () => checkSplit req)
+
+/--
+Checks a Rust normalization (`normalize_atoms`: split, eliminate record and
+set literals, split again) against the Lean model: computes
+`Cedar.DNF.normalize` on the input and compares the result structurally
+with the Rust output; canonicalization as for `runCheckSplit`. The input is
+well typed (the Rust side checks; the model assumes).
+-/
+private def checkElim (req : Cedar.DNF.Proto.SplitCheckRequest) : CheckResult :=
+  let result := Cedar.DNF.normalize (canonExpr req.expr)
+  let expected := canonExpr req.expected
+  if result = expected then
+    { agrees := true }
+  else
+    { agrees := false, expected := reprStr expected, actual := reprStr result }
+
+/--
+  `req`: binary protobuf for a `SplitCheckRequest`
+
+  Checks a Rust normalization (`normalize_atoms`) against the Lean model
+  (`Cedar.DNF.normalize`).
+-/
+@[export runCheckElim] unsafe def runCheckElim (req : ByteArray) : String :=
+  runFfiM do
+    let req ← ((@Proto.Message.interpret? Cedar.DNF.Proto.SplitCheckRequest) req
+      |>.mapError (s!"failed to parse input: {·}") : Except String _)
+    runAndTime (λ () => checkElim req)
 
 /-- Checks a Rust like-rewrite (`rewrite_like`) against the Lean model
 (`Cedar.DNF.rewriteLike`), both sides canonicalized with `canonExpr`. -/
