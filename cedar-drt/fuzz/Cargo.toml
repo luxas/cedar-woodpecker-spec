@@ -570,6 +570,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "like-lean-drt"
+path = "fuzz_targets/like-lean-drt.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "symcc-cex-drt"
 path = "fuzz_targets/symcc-cex-drt.rs"
 test = false

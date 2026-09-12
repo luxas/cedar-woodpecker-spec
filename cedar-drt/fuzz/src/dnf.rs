@@ -33,7 +33,8 @@ use cedar_policy_generators::hierarchy::HierarchyGenerator;
 use cedar_policy_generators::schema;
 use cedar_policy_generators::schema_gen::SchemaGen;
 use cedar_policy_symcc::dnf::{
-    DEFAULT_MAX_CUBES, DEFAULT_MAX_SPLIT_NODES, Dnf, DnfError, split_atoms,
+    DEFAULT_MAX_CUBES, DEFAULT_MAX_SPLIT_NODES, Dnf, DnfError, likes_have_wildcards, rewrite_like,
+    split_atoms,
 };
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use log::debug;
@@ -342,6 +343,107 @@ mod split_test {
             };
             match test_split_vs_lean(&ffi, &input.expression) {
                 Verdict::Checked => checked += 1,
+                Verdict::Skipped(_) => *skipped.entry("skipped").or_default() += 1,
+            }
+            if checked >= wanted {
+                break;
+            }
+        }
+        eprintln!("checked {checked} inputs; skipped: {skipped:?}");
+        assert!(
+            checked >= wanted,
+            "only {checked} of {wanted} wanted inputs were checked; skipped: {skipped:?}"
+        );
+    }
+}
+
+/// Runs the Rust like-rewrite (`rewrite_like`) and the Lean model on
+/// `expression` and compares the outputs structurally; also checks the
+/// Rust result satisfies the completeness predicate. Panics on a mismatch.
+pub fn test_like_vs_lean(ffi: &CedarLeanFfi, expression: &Expr) -> Verdict {
+    let rewritten = match rewrite_like(expression) {
+        Ok(rewritten) => rewritten,
+        Err(e) => panic!("the Rust like-rewrite failed on `{expression}`: {e}"),
+    };
+    assert!(
+        likes_have_wildcards(&rewritten),
+        "the Rust like-rewrite left a wildcard-free like in `{rewritten}`"
+    );
+    debug!("Rust like-rewrite: {rewritten}\n");
+    match ffi.run_like_check(expression, &rewritten) {
+        Ok(result) => {
+            assert!(
+                result.agrees,
+                "the Rust like-rewrite and the Lean model disagree on `{expression}`:\n  Rust: {}\n  Lean: {}",
+                result.expected, result.actual
+            );
+            Verdict::Checked
+        }
+        Err(e) => panic!("the Lean FFI call failed on `{expression}`: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod like_test {
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
+    use cedar_policy::Expression;
+    use rand::{Rng, SeedableRng};
+
+    use super::*;
+    use crate::symeval::Verdict;
+    use libfuzzer_sys::arbitrary::{Arbitrary, Unstructured};
+
+    fn expr(text: &str) -> Expr {
+        Expression::from_str(text).unwrap().as_ref().clone()
+    }
+
+    /// Hand-picked shapes: wildcard-free (incl. the empty pattern and an
+    /// escaped star), a wildcard kept, and likes inside every node kind.
+    #[test]
+    fn like_lean_fixed_cases() {
+        let ffi = CedarLeanFfi::new();
+        let cases = [
+            r#"context.s like "abc""#,
+            r#"context.s like """#,
+            r#"context.s like "a\*b""#,
+            r#"context.s like "a*b""#,
+            r#"context.s like "*""#,
+            r#"if context.s like "x" then {a: context.t like "y", b: context.u} == context.r else [context.s like "z*"].contains(true)"#,
+            r#"iferror(context.s like "x", context.t like "y") && !(context.s like "w")"#,
+            r#"(context.s like "x") == (context.s like "*x")"#,
+            r#"context.a && context.b"#,
+        ];
+        for text in cases {
+            let expression = expr(text);
+            match test_like_vs_lean(&ffi, &expression) {
+                Verdict::Checked => {}
+                Verdict::Skipped(skip) => panic!("`{text}` was skipped: {skip:?}"),
+            }
+        }
+    }
+
+    /// Exercises the target's plumbing on generated inputs from a fixed
+    /// seed; only inputs the rewrite actually changes count.
+    #[test]
+    fn like_lean_target_smoke() {
+        let ffi = CedarLeanFfi::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x11ce_5eed);
+        let (wanted, max_attempts) = (10, 4_000);
+        let mut checked = 0;
+        let mut skipped: HashMap<&'static str, usize> = HashMap::new();
+        for _ in 0..max_attempts {
+            let mut bytes = vec![0u8; 1 << 14];
+            rng.fill_bytes(&mut bytes);
+            let Ok(input) = DnfFuzzTargetInput::arbitrary(&mut Unstructured::new(&bytes)) else {
+                *skipped.entry("not generated").or_default() += 1;
+                continue;
+            };
+            let touched = rewrite_like(&input.expression).unwrap() != input.expression;
+            match test_like_vs_lean(&ffi, &input.expression) {
+                Verdict::Checked if touched => checked += 1,
+                Verdict::Checked => *skipped.entry("no wildcard-free like").or_default() += 1,
                 Verdict::Skipped(_) => *skipped.entry("skipped").or_default() += 1,
             }
             if checked >= wanted {
