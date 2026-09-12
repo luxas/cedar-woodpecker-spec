@@ -346,6 +346,13 @@ message SplitCheckRequest {
     cedar_policy_core.Expr expected = 2;
 }
 
+// A Rust like-rewrite to check against the Lean model
+// (`Cedar.DNF.rewriteLike`): the input and `rewrite_like(expr)`.
+message LikeCheckRequest {
+    cedar_policy_core.Expr expr = 1;
+    cedar_policy_core.Expr expected = 2;
+}
+
 // Partial Authorization Messages
 message PartialEntityUID {
     cedar_policy_core.Name ty = 1;

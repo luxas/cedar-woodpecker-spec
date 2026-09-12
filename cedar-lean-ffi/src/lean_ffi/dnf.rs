@@ -21,7 +21,7 @@ use crate::datatypes::{ResultDef, TimedDef, tpe::CheckResult};
 use crate::err::FfiError;
 use crate::messages::proto;
 
-use super::{CedarLeanFfi, call_lean_ffi_takes_protobuf, runCheckDnf, runCheckSplit};
+use super::{CedarLeanFfi, call_lean_ffi_takes_protobuf, runCheckDnf, runCheckLike, runCheckSplit};
 
 impl CedarLeanFfi {
     /// Checks a Rust DNF conversion against the Lean model: the model
@@ -66,6 +66,32 @@ impl CedarLeanFfi {
             call_lean_ffi_takes_protobuf(
                 runCheckSplit,
                 &proto::SplitCheckRequest::new(expr, expected),
+            )
+        };
+        match response
+            .as_borrowed()
+            .deserialize_into::<ResultDef<TimedDef<CheckResult>>>()?
+        {
+            ResultDef::Ok(resp) => Ok(resp.data),
+            ResultDef::Error(s) => Err(FfiError::LeanBackendError(s)),
+        }
+    }
+}
+
+impl CedarLeanFfi {
+    /// Checks a Rust like-rewrite against the Lean model: the model
+    /// recomputes `rewriteLike expr` and compares it structurally with
+    /// `expected` (the Rust `rewrite_like(expr)`), after canonicalizing
+    /// record-field order on both sides.
+    pub fn run_like_check(
+        &self,
+        expr: &cedar_policy_core::ast::Expr,
+        expected: &cedar_policy_core::ast::Expr,
+    ) -> Result<CheckResult, FfiError> {
+        let response = unsafe {
+            call_lean_ffi_takes_protobuf(
+                runCheckLike,
+                &proto::LikeCheckRequest::new(expr, expected),
             )
         };
         match response

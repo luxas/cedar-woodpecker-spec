@@ -25,6 +25,7 @@ import Cedar.SymCCOpt.Verifier
 import CedarProto
 import Cedar.DNF
 import Cedar.DNF.Split
+import Cedar.DNF.Like
 import Cedar.TPE
 import Cedar.TPE.Authorizer
 import Protobuf
@@ -1049,6 +1050,27 @@ private def checkSplit (req : Cedar.DNF.Proto.SplitCheckRequest) : CheckResult :
     let req ← ((@Proto.Message.interpret? Cedar.DNF.Proto.SplitCheckRequest) req
       |>.mapError (s!"failed to parse input: {·}") : Except String _)
     runAndTime (λ () => checkSplit req)
+
+/-- Checks a Rust like-rewrite (`rewrite_like`) against the Lean model
+(`Cedar.DNF.rewriteLike`), both sides canonicalized with `canonExpr`. -/
+private def checkLike (req : Cedar.DNF.Proto.LikeCheckRequest) : CheckResult :=
+  let result := Cedar.DNF.rewriteLike (canonExpr req.expr)
+  let expected := canonExpr req.expected
+  if result = expected then
+    { agrees := true }
+  else
+    { agrees := false, expected := reprStr expected, actual := reprStr result }
+
+/--
+  `req`: binary protobuf for a `LikeCheckRequest`
+
+  Checks a Rust like-rewrite against the Lean model.
+-/
+@[export runCheckLike] unsafe def runCheckLike (req : ByteArray) : String :=
+  runFfiM do
+    let req ← ((@Proto.Message.interpret? Cedar.DNF.Proto.LikeCheckRequest) req
+      |>.mapError (s!"failed to parse input: {·}") : Except String _)
+    runAndTime (λ () => checkLike req)
 
 --------------------------------- FFI Test Utils ---------------------------------
 /- Some definitions used to test lean object decoding in Rust -/
