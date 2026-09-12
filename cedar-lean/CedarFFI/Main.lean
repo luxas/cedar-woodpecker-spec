@@ -881,6 +881,110 @@ def parseResidualReauthorizationRequest (req: ByteArray):
 
 
 
+--------------------------------- Symbolic evaluator replay ---------------------------------
+
+/--
+The state of a replay: the queries still to be answered, and the index of the
+next one (for error messages).
+-/
+private abbrev ReplayM := ExceptT String (StateM (List Proto.SymEvalQuery × Nat))
+
+/--
+The replay oracle: answers each query from the recording, in order, after
+checking that the model asked exactly the recorded question. The first
+divergence — a different assert list, or a query beyond the recording — is the
+differential-test signal and aborts the replay.
+-/
+private def replayOracle (ts : Asserts) : ReplayM Bool := do
+  let (queue, idx) ← get
+  match queue with
+  | [] => throw s!"query {idx}: the model issued a query but the recording has no more"
+  | q :: rest =>
+    set (rest, idx + 1)
+    if ts ≠ q.asserts then
+      throw s!"query {idx}: assert lists diverge\nrecorded: {reprStr q.asserts}\nmodel: {reprStr ts}"
+    return q.unsat
+
+/--
+Sorts record fields recursively, so that two expressions can be compared
+structurally regardless of the order their record fields arrived in: protobuf
+map fields are encoded from a Rust `HashMap`, so the wire order is arbitrary
+(and differs between the target expression and the expected result, which are
+encoded separately). Everything else keeps its order.
+-/
+private partial def canonExpr : Spec.Expr → Spec.Expr
+  | .lit p => .lit p
+  | .var v => .var v
+  | .ite c t e => .ite (canonExpr c) (canonExpr t) (canonExpr e)
+  | .and a b => .and (canonExpr a) (canonExpr b)
+  | .or a b => .or (canonExpr a) (canonExpr b)
+  | .unaryApp op x => .unaryApp op (canonExpr x)
+  | .binaryApp op a b => .binaryApp op (canonExpr a) (canonExpr b)
+  | .getAttr x a => .getAttr (canonExpr x) a
+  | .hasAttr x a => .hasAttr (canonExpr x) a
+  | .set xs => .set (xs.map canonExpr)
+  | .record axs => .record (Data.Map.make (axs.map (λ (a, x) => (a, canonExpr x)))).toList
+  | .call f xs => .call f (xs.map canonExpr)
+
+/--
+Replays a recorded Rust symbolic evaluation through the Lean model and
+compares the results: the folded expression, the root outcome set, the
+`check_equivalent` verdict when one was recorded, and that the recording was
+consumed exactly.
+-/
+private def replaySymEval (req : Proto.SymEvalReplayRequest) (εnv : SymEnv) : CheckResult :=
+  -- record fields cross the FFI in wire order; the Rust evaluator walks them
+  -- in `BTreeMap` order, which `canonExpr` restores (compilation itself sorts)
+  match SymCC.Opt.buildTree (canonExpr req.expr) εnv with
+  | .error e =>
+    { agrees := false, expected := "a compilable expression",
+      actual := s!"buildTree failed: {reprStr e}" }
+  | .ok (root, _) =>
+    let expectedOutcomes : SymCC.Opt.Outcomes :=
+      ⟨req.expectedCanTrue, req.expectedCanFalse, req.expectedCanError⟩
+    let go : ReplayM CheckResult := do
+      let r ← match (← (SymCC.Opt.evalRoot replayOracle root req.base).run) with
+        | .ok r => pure r
+        | .error e => throw s!"evaluation failed: {reprStr e}"
+      if req.checkEquivalent then
+        match (← (SymCC.Opt.checkEquivalent replayOracle req.ceBase root.term r εnv).run) with
+        | .ok true => pure ()
+        | .ok false => throw "checkEquivalent: the result is not equivalent to the input"
+        | .error e => throw s!"checkEquivalent failed: {reprStr e}"
+      let (queue, idx) ← get
+      if !queue.isEmpty then
+        throw s!"the model finished after {idx} queries but the recording has {queue.length} more"
+      if canonExpr r.toExpr = canonExpr req.expected ∧ r.outcomes = expectedOutcomes then
+        return { agrees := true }
+      else
+        return { agrees := false,
+                 expected := s!"{reprStr req.expected} with outcomes {reprStr expectedOutcomes}",
+                 actual := s!"{reprStr r.toExpr} with outcomes {reprStr r.outcomes}" }
+    match (go.run.run (req.queries.toList, 0)).fst with
+    | .ok cr => cr
+    | .error msg => { agrees := false, expected := "a successful replay", actual := msg }
+
+def parseSymEvalReplayRequest (schema : Schema) (proto : ByteArray) :
+  Except String (Proto.SymEvalReplayRequest × SymEnv) := do
+  let req ← (@Proto.Message.interpret? Proto.SymEvalReplayRequest) proto
+    |>.mapError (s!"failed to parse input: {·}")
+  let request := req.request
+  let env ← match schema.environment? request.principal request.resource request.action with
+    | none => .error s!"failed to get environment from requestEnv (PrincipalType: {request.principal}, ActionName: {request.action}, ResourceType: {request.resource})"
+    | some env => .ok env
+  return (req, SymEnv.ofTypeEnv env)
+
+/--
+  `req`: binary protobuf for a `SymEvalReplayRequest`
+
+  Replays a recorded Rust symbolic evaluation through the Lean model of the
+  symbolic evaluator and compares the results.
+-/
+@[export runSymEvalReplay] unsafe def runSymEvalReplay (schema : Schema) (req : ByteArray) : String :=
+  runFfiM do
+    let (req, εnv) ← (parseSymEvalReplayRequest schema req : Except String _)
+    runAndTime (λ () => replaySymEval req εnv)
+
 --------------------------------- FFI Test Utils ---------------------------------
 /- Some definitions used to test lean object decoding in Rust -/
 
