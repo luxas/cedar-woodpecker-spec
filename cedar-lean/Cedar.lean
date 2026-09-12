@@ -18,6 +18,7 @@ import Cedar.Data
 import Cedar.DNF
 import Cedar.DNF.Split
 import Cedar.DNF.Elim
+import Cedar.DNF.SplitPolicy
 import Cedar.DNF.Like
 import Cedar.Spec
 import Cedar.Thm
