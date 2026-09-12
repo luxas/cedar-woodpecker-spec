@@ -26,6 +26,7 @@ import CedarProto
 import Cedar.DNF
 import Cedar.DNF.Split
 import Cedar.DNF.Elim
+import Cedar.DNF.SplitPolicy
 import Cedar.DNF.Like
 import Cedar.TPE
 import Cedar.TPE.Authorizer
@@ -1078,6 +1079,32 @@ private def checkElim (req : Cedar.DNF.Proto.SplitCheckRequest) : CheckResult :=
     let req ← ((@Proto.Message.interpret? Cedar.DNF.Proto.SplitCheckRequest) req
       |>.mapError (s!"failed to parse input: {·}") : Except String _)
     runAndTime (λ () => checkElim req)
+
+/--
+Checks a Rust policy split against the Lean model: computes
+`Cedar.DNF.splitCondExprs` on the policy's condition and compares the list
+with the conditions of the split policies Rust produced, in order. Input and
+expected are canonicalized with `canonExpr` as for `runCheckSplit`.
+-/
+private def checkSplitPolicy (req : Cedar.DNF.Proto.SplitPolicyCheckRequest) : CheckResult :=
+  let result := Cedar.DNF.splitCondExprs (canonExpr req.expr)
+  let expected := req.expected.toList.map canonExpr
+  if result = expected then
+    { agrees := true }
+  else
+    { agrees := false, expected := reprStr expected, actual := reprStr result }
+
+/--
+  `req`: binary protobuf for a `SplitPolicyCheckRequest`
+
+  Checks a Rust policy split (`split_policy`) against the Lean model
+  (`Cedar.DNF.splitCondExprs`).
+-/
+@[export runCheckSplitPolicy] unsafe def runCheckSplitPolicy (req : ByteArray) : String :=
+  runFfiM do
+    let req ← ((@Proto.Message.interpret? Cedar.DNF.Proto.SplitPolicyCheckRequest) req
+      |>.mapError (s!"failed to parse input: {·}") : Except String _)
+    runAndTime (λ () => checkSplitPolicy req)
 
 /-- Checks a Rust like-rewrite (`rewrite_like`) against the Lean model
 (`Cedar.DNF.rewriteLike`), both sides canonicalized with `canonExpr`. -/

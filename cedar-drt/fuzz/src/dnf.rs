@@ -27,7 +27,10 @@
 //! never-true cube) — so both pruning behaviours are compared.
 
 use cedar_lean_ffi::CedarLeanFfi;
-use cedar_policy_core::ast::Expr;
+use cedar_policy_core::ast::{
+    ActionConstraint, Annotations, Effect, Expr, PolicyID, PrincipalConstraint, ResourceConstraint,
+    StaticPolicy,
+};
 use cedar_policy_generators::abac::ABACRequest;
 use cedar_policy_generators::abac::Type;
 use cedar_policy_generators::hierarchy::HierarchyGenerator;
@@ -35,7 +38,7 @@ use cedar_policy_generators::schema;
 use cedar_policy_generators::schema_gen::SchemaGen;
 use cedar_policy_symcc::dnf::{
     DEFAULT_MAX_CUBES, DEFAULT_MAX_SPLIT_NODES, Dnf, DnfError, likes_have_wildcards,
-    normalize_atoms, rewrite_like, split_atoms,
+    normalize_atoms, rewrite_like, split_atoms, split_policy,
 };
 use cedar_policy_symcc::evaluator::request_env_of;
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
@@ -579,6 +582,173 @@ mod elim_test {
         assert!(
             checked >= wanted,
             "only {checked} of {wanted} inputs were checked; skipped: {skipped:?}"
+        );
+    }
+}
+
+/// Runs the Rust policy splitter on `permit(principal, action, resource)
+/// when { expression }` and compares the split policies' conditions, in
+/// order, with the Lean model's `splitCondExprs`. Panics on a mismatch; an
+/// ill-typed expression (the split validates the policy against `schema`)
+/// and a Rust-side resource limit are benign skips.
+pub fn test_split_policy_vs_lean(
+    ffi: &CedarLeanFfi,
+    schema: &cedar_policy::Schema,
+    expression: &Expr,
+) -> Verdict {
+    let policy = StaticPolicy::new(
+        PolicyID::from_string("p"),
+        None,
+        Annotations::new(),
+        Effect::Permit,
+        PrincipalConstraint::any(),
+        ActionConstraint::any(),
+        ResourceConstraint::any(),
+        Some(expression.clone()),
+    )
+    .expect("a generated expression contains no slot");
+    let split = match split_policy(
+        &policy.into(),
+        schema,
+        DEFAULT_MAX_SPLIT_NODES,
+        DEFAULT_MAX_CUBES,
+    ) {
+        Ok(split) => split,
+        Err(DnfError::NotWellTyped { .. }) => {
+            return Skip::Benign("the policy is not well typed".into()).into();
+        }
+        Err(e @ (DnfError::RequestEnvNotFound(_) | DnfError::Typecheck(_))) => {
+            return Skip::Benign(format!("the Rust typecheck could not run: {e}")).into();
+        }
+        Err(e @ (DnfError::TooLarge { .. } | DnfError::RecursionLimit)) => {
+            return Skip::Benign(format!("the Rust policy split hit a resource limit: {e}")).into();
+        }
+        Err(e @ DnfError::Unsupported(_)) => {
+            // With `tolerant-ast` off, `Unsupported` can only mean a Rust
+            // invariant breach — the very bug class this DRT exists to catch.
+            panic!("the Rust policy split violated an invariant on `{expression}`: {e}");
+        }
+    };
+    let conditions: Vec<Expr> = split
+        .iter()
+        .map(|p| {
+            p.non_scope_constraints()
+                .expect("a split policy carries its cube as its condition")
+                .clone()
+        })
+        .collect();
+    debug!("Rust policy split: {} policies\n", conditions.len());
+    match ffi.run_split_policy_check(expression, &conditions) {
+        Ok(result) => {
+            assert!(
+                result.agrees,
+                "the Rust policy split and the Lean model disagree on `{expression}`:\n  Rust: {}\n  Lean: {}",
+                result.expected, result.actual
+            );
+            Verdict::Checked
+        }
+        Err(e) => panic!("the Lean FFI call failed on `{expression}`: {e}"),
+    }
+}
+
+#[cfg(test)]
+mod split_policy_test {
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
+    use cedar_policy::Expression;
+    use rand::{Rng, SeedableRng};
+
+    use super::*;
+    use crate::symeval::Verdict;
+    use libfuzzer_sys::arbitrary::{Arbitrary, Unstructured};
+
+    fn expr(text: &str) -> Expr {
+        Expression::from_str(text).unwrap().as_ref().clone()
+    }
+
+    /// Hand-picked conditions: the README `a || b` example (`[a, !a && b]`),
+    /// the trivial `true` (one empty cube) and `false` (no policies at all),
+    /// the Step-2 worked shapes (ifs and boolean structure under `==`),
+    /// and a two-field record (the hoist-order transport path).
+    /// A schema for the fixed cases: `view`'s context carries the booleans
+    /// `a`–`d`, `x`, `y`, `z`, `w` and the record `r {a: Bool, b: Bool}`.
+    fn fixture() -> cedar_policy::Schema {
+        cedar_policy::Schema::from_cedarschema_str(
+            r#"
+            entity User;
+            entity Doc;
+            action view appliesTo {
+                principal: User,
+                resource: Doc,
+                context: { a: Bool, b: Bool, c: Bool, d: Bool, x: Bool, y: Bool, z: Bool, w: Bool,
+                           r: { a: Bool, b: Bool } }
+            };
+            "#,
+        )
+        .unwrap()
+        .0
+    }
+
+    #[test]
+    fn split_policy_lean_fixed_cases() {
+        let ffi = CedarLeanFfi::new();
+        let schema = fixture();
+        let cases = [
+            "context.a || context.b",
+            "true",
+            "false",
+            "context.a && context.b",
+            "context.a && false",
+            "!context.a",
+            "if context.a then context.b else context.c",
+            "(if context.a then 1 else 2) == 1",
+            "(context.a && context.b) == (context.c || context.d)",
+            "{a: context.x && context.y, b: context.z && context.w} == context.r",
+            "context.a || (context.b && (context.c || context.d))",
+            // the normalization's elimination, at policy level
+            "{a: context.x, b: context.y}.a && context.b",
+            "[context.x, context.y].contains(context.a)",
+        ];
+        for text in cases {
+            let expression = expr(text);
+            match test_split_policy_vs_lean(&ffi, &schema, &expression) {
+                Verdict::Checked => {}
+                Verdict::Skipped(skip) => panic!("`{text}` was skipped: {skip:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn split_policy_lean_target_smoke() {
+        let ffi = CedarLeanFfi::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x5b117_9011);
+        let (wanted, max_attempts) = (30, 4_000);
+        let mut checked = 0;
+        let mut skipped: HashMap<&'static str, usize> = HashMap::new();
+        for _ in 0..max_attempts {
+            let mut bytes = vec![0u8; 1 << 14];
+            rng.fill_bytes(&mut bytes);
+            let Ok(input) = ElimFuzzTargetInput::arbitrary(&mut Unstructured::new(&bytes)) else {
+                *skipped.entry("not generated").or_default() += 1;
+                continue;
+            };
+            let Ok(schema) = cedar_policy::Schema::try_from(input.schema.clone()) else {
+                *skipped.entry("schema").or_default() += 1;
+                continue;
+            };
+            match test_split_policy_vs_lean(&ffi, &schema, &input.expression) {
+                Verdict::Checked => checked += 1,
+                Verdict::Skipped(_) => *skipped.entry("skipped").or_default() += 1,
+            }
+            if checked >= wanted {
+                break;
+            }
+        }
+        eprintln!("checked {checked} inputs; skipped: {skipped:?}");
+        assert!(
+            checked >= wanted,
+            "only {checked} of {wanted} wanted inputs were checked; skipped: {skipped:?}"
         );
     }
 }

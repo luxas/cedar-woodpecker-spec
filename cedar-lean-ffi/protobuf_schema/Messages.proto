@@ -346,6 +346,14 @@ message SplitCheckRequest {
     cedar_policy_core.Expr expected = 2;
 }
 
+// A Rust policy split to check against the Lean model
+// (`Cedar.DNF.splitCondExprs`): the policy's condition and the conditions of
+// the split policies `split_policy` produced, in order.
+message SplitPolicyCheckRequest {
+    cedar_policy_core.Expr expr = 1;
+    repeated cedar_policy_core.Expr expected = 2;
+}
+
 // A Rust like-rewrite to check against the Lean model
 // (`Cedar.DNF.rewriteLike`): the input and `rewrite_like(expr)`.
 message LikeCheckRequest {

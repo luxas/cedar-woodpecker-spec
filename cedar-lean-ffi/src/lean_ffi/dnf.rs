@@ -23,7 +23,7 @@ use crate::messages::proto;
 
 use super::{
     CedarLeanFfi, call_lean_ffi_takes_protobuf, runCheckDnf, runCheckElim, runCheckLike,
-    runCheckSplit,
+    runCheckSplit, runCheckSplitPolicy,
 };
 
 impl CedarLeanFfi {
@@ -95,6 +95,33 @@ impl CedarLeanFfi {
             call_lean_ffi_takes_protobuf(
                 runCheckSplit,
                 &proto::SplitCheckRequest::new(expr, expected),
+            )
+        };
+        match response
+            .as_borrowed()
+            .deserialize_into::<ResultDef<TimedDef<CheckResult>>>()?
+        {
+            ResultDef::Ok(resp) => Ok(resp.data),
+            ResultDef::Error(s) => Err(FfiError::LeanBackendError(s)),
+        }
+    }
+}
+
+impl CedarLeanFfi {
+    /// Checks a Rust policy split against the Lean model: the model
+    /// recomputes `Cedar.DNF.splitCondExprs` on the policy's condition `expr`
+    /// and compares the list with `expected` (the conditions of the split
+    /// policies, in order), after canonicalizing record-field order on both
+    /// sides.
+    pub fn run_split_policy_check(
+        &self,
+        expr: &cedar_policy_core::ast::Expr,
+        expected: &[cedar_policy_core::ast::Expr],
+    ) -> Result<CheckResult, FfiError> {
+        let response = unsafe {
+            call_lean_ffi_takes_protobuf(
+                runCheckSplitPolicy,
+                &proto::SplitPolicyCheckRequest::new(expr, expected),
             )
         };
         match response

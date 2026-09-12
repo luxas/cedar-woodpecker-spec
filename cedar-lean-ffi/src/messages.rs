@@ -920,6 +920,21 @@ impl proto::SplitCheckRequest {
     }
 }
 
+impl proto::SplitPolicyCheckRequest {
+    pub(crate) fn new(
+        expr: &cedar_policy_core::ast::Expr,
+        expected: &[cedar_policy_core::ast::Expr],
+    ) -> Self {
+        Self {
+            expr: Some(cedar_policy::proto::models::Expr::from(expr)),
+            expected: expected
+                .iter()
+                .map(cedar_policy::proto::models::Expr::from)
+                .collect(),
+        }
+    }
+}
+
 impl proto::LikeCheckRequest {
     pub(crate) fn new(
         expr: &cedar_policy_core::ast::Expr,
