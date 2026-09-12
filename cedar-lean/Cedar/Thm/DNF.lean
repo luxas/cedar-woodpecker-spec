@@ -23,6 +23,8 @@ import Cedar.Thm.DNF.Equivalence
 import Cedar.Thm.DNF.SplitEquiv
 import Cedar.Thm.DNF.HoistSpec
 import Cedar.Thm.DNF.SplitSound
+import Cedar.Thm.DNF.Wildcard
+import Cedar.Thm.DNF.Like
 import Cedar.Thm.DNF.IfError
 
 /-!
