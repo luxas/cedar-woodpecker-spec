@@ -23,6 +23,8 @@ import Cedar.Thm.DNF.Equivalence
 import Cedar.Thm.DNF.SplitEquiv
 import Cedar.Thm.DNF.HoistSpec
 import Cedar.Thm.DNF.SplitSound
+import Cedar.Thm.DNF.SplitCond
+import Cedar.Thm.DNF.SplitPolicyThm
 import Cedar.Thm.DNF.Wildcard
 import Cedar.Thm.DNF.Like
 import Cedar.Thm.DNF.IfError
@@ -63,6 +65,16 @@ For the Step 2 atom splitter modeled in `Cedar.DNF.Split`:
 * `Cedar.DNF.evaluate_dnf_splitAtoms` — the pipeline: the DNF of the split
   expression evaluates like the original, under the Step 1 hypotheses for
   the split expression.
+
+For the Step 3 policy splitter modeled in `Cedar.DNF.SplitPolicy`:
+
+* `Cedar.DNF.policy_satisfied_iff` — a policy is satisfied exactly when one
+  of its split policies is, on every request and entity store, with no
+  hypotheses; `policy_satisfied_unique` — never more than one;
+* `Cedar.DNF.splitPolicySet_decision` — **the Phase 3.5 goal**: replacing
+  every policy of a set by its split preserves the authorization decision
+  on every input. The `determiningPolicies`/`erroringPolicies` diagnostics
+  are not claimed equal (ids differ; erroring cubes differ).
 
 For the `iferror` operator (Step 4, part 1), in `Cedar.Thm.DNF.IfError`:
 
