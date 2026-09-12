@@ -483,6 +483,16 @@ impl AvailableExtensionFunctions {
                 parameter_types: vec![Type::decimal(), Type::decimal()],
                 return_ty: Type::bool(),
             },
+            // `iferror(e, d)`: `e`'s boolean, or `d`'s when `e` errors (Phase 3
+            // Step 4, part 1). Generating it exercises every evaluator's special
+            // case for it and the symbolic compilers' `ite (isNone e) d e`.
+            AvailableExtensionFunction {
+                name: Name::parse_unqualified_name("iferror")
+                    .expect("should be a valid identifier"),
+                is_constructor: false,
+                parameter_types: vec![Type::bool(), Type::bool()],
+                return_ty: Type::bool(),
+            },
             AvailableExtensionFunction {
                 name: Name::parse_unqualified_name("datetime")
                     .expect("should be a valid identifier"),

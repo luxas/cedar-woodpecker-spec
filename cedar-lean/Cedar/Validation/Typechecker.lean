@@ -335,6 +335,7 @@ public def typeOfCall (xfn : ExtFun) (tys : List TypedExpr) (xs : List Expr) : R
   | .toMinutes, [.ext .duration]                        => ok .int
   | .toHours, [.ext .duration]                          => ok .int
   | .toDays , [.ext .duration]                          => ok .int
+  | .ifError, [.bool _, .bool _]                        => ok (.bool .anyBool)
   | _, _                                                => err (.extensionErr xs)
 
 

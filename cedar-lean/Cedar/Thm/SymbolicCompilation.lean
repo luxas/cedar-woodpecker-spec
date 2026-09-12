@@ -613,6 +613,15 @@ theorem compile_ok_implies_option {x : Expr} {εnv : SymEnv} {t : Term} :
       intro h ; subst t
       apply typeOf_ifSome
       apply typeOf_someOf
+    case _ =>
+      -- `iferror`: `ite (isNone e) d e` over two `Option Bool` terms
+      simp only [compileIfError]
+      split <;> simp only [Except.ok.injEq, reduceCtorEq, false_implies]
+      intro h ; subst t
+      rename_i hty
+      apply typeOf_ite
+      · exact ⟨_, hty.right⟩
+      · exact ⟨_, hty.left⟩
     case _ => simp
   case record m =>
     simp [do_eq_ok] ; intro m' hm h ; subst t

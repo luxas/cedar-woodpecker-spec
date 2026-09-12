@@ -320,8 +320,10 @@ theorem type_of_call_decimal_comparator_is_sound {xfn : ExtFun} {xs : List Expr}
   rw [h₄]
   subst h₅ h₆
   apply And.intro empty_guarded_capabilities_invariant
-  simp only [EvaluatesTo, evaluate, List.mapM₁, List.attach_def, List.pmap, List.mapM_cons,
-    List.mapM_nil, pure_bind, bind_assoc]
+  have hne : xfn ≠ .ifError := by
+    intro h ; subst h ; simp [IsDecimalComparator] at h₀
+  simp only [EvaluatesTo, evaluate_call_ne _ _ _ hne, List.mapM₁, List.attach_def, List.pmap,
+    List.mapM_cons, List.mapM_nil, pure_bind, bind_assoc]
   have ih₁ := ih x₁
   have ih₂ := ih x₂
   simp [TypeOfIsSound] at ih₁ ih₂
@@ -416,6 +418,74 @@ theorem type_of_call_isInRange_comparator_is_sound {xs : List Expr} {c₁ c₂ :
   subst hr₁ hr₂
   simp [call]
   apply bool_is_instance_of_anyBool
+
+theorem type_of_call_ifError_inversion {xs : List Expr} {c c' : Capabilities} {env : TypeEnv} {ty : TypedExpr}
+  (h₁ : typeOf (Expr.call .ifError xs) c env = Except.ok (ty, c')) :
+  ty.typeOf = .bool .anyBool ∧
+  c' = ∅ ∧
+  ∃ (x₁ x₂ : Expr) (bty₁ bty₂ : BoolType) (c₁ c₂ : Capabilities),
+    xs = [x₁, x₂] ∧
+    (typeOf x₁ c env).typeOf = .ok (.bool bty₁, c₁) ∧
+    (typeOf x₂ c env).typeOf = .ok (.bool bty₂, c₂)
+:= by
+  simp [typeOf] at h₁
+  cases h₂ : List.mapM₁ xs fun x => justType (typeOf x.val c env) <;>
+  simp [h₂] at h₁
+  rename_i tys
+  simp [typeOfCall] at h₁
+  split at h₁ <;> try { contradiction }
+  all_goals {
+    simp [ok] at h₁
+    have ⟨hl₁, hr₁⟩ := h₁
+    rw [←hl₁]
+    simp only [TypedExpr.typeOf, hr₁, List.empty_eq, true_and]
+    rename_i h₃
+    cases tys <;> try simp at h₃
+    rename_i tys
+    cases tys <;> try simp at h₃
+    rename_i tys
+    cases tys <;> try simp at h₃
+    have ⟨ h₃ₗ, h₃ᵣ ⟩ := h₃
+    have ⟨x₁, x₂, c₁, c₂, hxs, hx₁, hx₂⟩ := typeOf_of_binary_call_inversion h₂
+    rw [h₃ₗ] at hx₁
+    rw [h₃ᵣ] at hx₂
+    exact ⟨x₁, x₂, _, _, c₁, c₂, hxs, hx₁, hx₂⟩
+  }
+
+/-- `iferror(e, d)` on boolean arguments yields a boolean: `e`'s when it
+succeeds, `d`'s when it errors, and errors only where `d` does. -/
+theorem type_of_call_ifError_is_sound {xs : List Expr} {c₁ c₂ : Capabilities} {env : TypeEnv} {ty : TypedExpr} {request : Request} {entities : Entities}
+  (h₁ : CapabilitiesInvariant c₁ request entities)
+  (h₂ : InstanceOfWellFormedEnvironment request entities env)
+  (h₃ : typeOf (Expr.call .ifError xs) c₁ env = Except.ok (ty, c₂))
+  (ih : ∀ (xᵢ : Expr), xᵢ ∈ xs → TypeOfIsSound xᵢ) :
+  GuardedCapabilitiesInvariant (Expr.call .ifError xs) c₂ request entities ∧
+  ∃ v, EvaluatesTo (Expr.call .ifError xs) request entities v ∧ InstanceOfType env v ty.typeOf
+:= by
+  have ⟨h₄, h₅, x₁, x₂, bty₁, bty₂, c₁', c₂', h₆, h₇, h₈⟩ := type_of_call_ifError_inversion h₃
+  rw [h₄]
+  subst h₅ h₆
+  apply And.intro empty_guarded_capabilities_invariant
+  have ih₁ := ih x₁
+  have ih₂ := ih x₂
+  simp [TypeOfIsSound] at ih₁ ih₂
+  split_type_of h₇ ; rename_i h₇ hl₇ hr₇
+  have ⟨_, v₁, hl₁, hr₁⟩ := ih₁ h₁ h₂ h₇
+  split_type_of h₈ ; rename_i h₈ hl₈ hr₈
+  have ⟨_, v₂, hl₂, hr₂⟩ := ih₂ h₁ h₂ h₈
+  rw [hl₇] at hr₁
+  rw [hl₈] at hr₂
+  have ⟨b₁, hb₁⟩ := instance_of_bool_is_bool hr₁
+  have ⟨b₂, hb₂⟩ := instance_of_bool_is_bool hr₂
+  subst hb₁ hb₂
+  simp only [EvaluatesTo] at hl₁ hl₂ ⊢
+  simp only [evaluate]
+  rcases hl₁ with hl₁ | hl₁ | hl₁ | hl₁ <;>
+  rcases hl₂ with hl₂ | hl₂ | hl₂ | hl₂ <;>
+  simp only [hl₁, hl₂, Result.as, Coe.coe, Value.asBool, bind, Except.bind, pure, Except.pure] <;>
+  first
+    | (refine ⟨.prim (.bool b₁), ?_, bool_is_instance_of_anyBool _⟩; simp; done)
+    | (refine ⟨.prim (.bool b₂), ?_, bool_is_instance_of_anyBool _⟩; simp; done)
 
 def IsIpAddrRecognizer : ExtFun → Prop
   | .isIpv4
@@ -907,17 +977,30 @@ theorem type_of_call_is_sound {xfn : ExtFun} {xs : List Expr} {c₁ c₂ : Capab
   | .toMinutes
   | .toHours
   | .toDays             => exact type_of_call_duration_converter_is_sound (by simp [IsDurationConverter]) h₁ h₂ h₃ ih
+  | .ifError            => exact type_of_call_ifError_is_sound h₁ h₂ h₃ ih
 
 /- Used by `type_of_preserves_evaluation_results` -/
 theorem type_of_preserves_evaluation_results_call {xfn ty c₂ request entities} {xs : List Expr} {tys : List TypedExpr} :
   typeOfCall xfn tys xs = Except.ok (ty, c₂) →
-  List.mapM (fun x => evaluate x request entities) xs = List.mapM (fun y => evaluate y.toExpr request entities) tys →
+  List.Forall₂ (fun x y => evaluate x request entities = evaluate y.toExpr request entities) xs tys →
   evaluate (Expr.call xfn xs) request entities = evaluate ty.toExpr request entities
 := by
-  intro h₁ h₂
+  intro h₁ hall
+  have h₂ := List.forall₂_implies_mapM_eq _ _ hall
   simp [typeOfCall] at h₁
   split at h₁ <;>
   simp [ok, err, do_ok_eq_ok] at h₁
+  case h_23 _ _ _ _ heq =>
+    -- `iferror` is lazy in its second argument, so the elementwise
+    -- equalities are needed, not just the `mapM` one
+    rcases h₁ with ⟨h₁, _⟩
+    subst h₁
+    match tys, heq, hall with
+    | [_, _], _, .cons hx₁ (.cons hx₂ .nil) =>
+      simp only [TypedExpr.toExpr, List.map₁_eq_map, List.map_cons, List.map_nil, evaluate, hx₁, hx₂]
+    | [], heq, _ => simp at heq
+    | [_], heq, _ => simp at heq
+    | _ :: _ :: _ :: _, heq, _ => simp at heq
   all_goals
     try replace ⟨_, _, h₁⟩ := h₁
     try replace ⟨h₁, _⟩ := h₁

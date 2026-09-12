@@ -152,6 +152,13 @@ def Residual.evaluate (x : Residual) (req : Request) (es: Entities) : Result Val
   | .record axs _ => do
     let avs ← axs.mapM₂ (fun ⟨(a₁, x₁), _⟩ => bindAttr a₁ (evaluate x₁ req es))
     .ok (Map.make avs)
+  -- `iferror`, as in `Spec.evaluate`
+  | .call .ifError [x₁, x₂] _ => do
+    let r := match evaluate x₁ req es with
+      | .error _ => evaluate x₂ req es
+      | r => r
+    let b ← r.as Bool
+    .ok b
   | .call xfn xs _ => do
     let vs ← xs.mapM₁ (fun ⟨x₁, _⟩ => evaluate x₁ req es)
     Cedar.Spec.call xfn vs
@@ -165,6 +172,16 @@ decreasing_by
     try simp at h
     omega
 
+
+
+/-- The strict equation of `Residual.evaluate` on a call that is not `iferror`. -/
+public theorem Residual.evaluate_call_ne {xfn : ExtFun} (xs : List Residual) (ty : CedarType)
+  (req : Request) (es : Entities) (hne : xfn ≠ .ifError) :
+  (Residual.call xfn xs ty).evaluate req es =
+    (do
+      let vs ← xs.mapM₁ (fun ⟨x₁, _⟩ => evaluate x₁ req es)
+      Cedar.Spec.call xfn vs)
+:= Residual.evaluate.eq_16 req es xfn xs ty (fun _ _ h _ => hne h)
 
 def Residual.allLiteralUIDs (x : Residual) : Set EntityUID :=
   match x with

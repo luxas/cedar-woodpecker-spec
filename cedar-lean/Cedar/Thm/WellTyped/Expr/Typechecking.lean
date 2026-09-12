@@ -1199,6 +1199,22 @@ theorem typechecked_is_well_typed_after_lifting_call
       simp only [List.map_cons, List.map_nil]
       constructor
       simp [type_of_after_lifted_is_lifted, h₂, CedarType.liftBoolTypes]
+  case h_23 _ _ _ _ heq =>
+    rcases h₃ with ⟨h₃, _⟩
+    subst h₃
+    simp only [TypedExpr.liftBoolTypes]
+    apply TypedExpr.WellTyped.call
+    · exact typechecked_is_well_typed_after_lifting_call_arg hᵢ hᵢ₁
+    · simp [CedarType.liftBoolTypes, List.map₁_eq_map, BoolType.lift]
+      unfold List.map at heq
+      split at heq <;> simp at heq
+      rcases heq with ⟨h₂, _, h₃, h₄⟩
+      subst h₃
+      simp only [List.map_cons, List.map_nil]
+      exact ExtFun.WellTyped.ifError (bty₁ := .anyBool) (bty₂ := .anyBool)
+        (by rw [type_of_after_lifted_is_lifted, h₂]; simp [CedarType.liftBoolTypes, BoolType.lift])
+        (by rw [type_of_after_lifted_is_lifted, h₄]; simp [CedarType.liftBoolTypes, BoolType.lift])
+
 
 theorem foldM_lub_some {x y: CedarType} {xs : List CedarType} :
   List.foldlM lub? x xs = some y →

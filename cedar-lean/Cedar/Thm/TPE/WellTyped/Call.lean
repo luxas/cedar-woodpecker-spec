@@ -66,6 +66,12 @@ theorem ext_well_typed_after_map {xfn args ty env f} :
     | apply ExtResidualWellTyped.isLoopback
     | apply ExtResidualWellTyped.isMulticast
     rw [h₃ x₁ (by simp), h₆]
+  -- `iferror`: two boolean arguments
+  case ifError x₁ x₂ _ _ h₆ h₇ =>
+    simp only [List.map_cons, List.map_nil]
+    apply ExtResidualWellTyped.ifError
+    . rw [h₃ x₁ (by simp), h₆]
+    . rw [h₃ x₂ (by simp), h₇]
   -- Binary operations: isInRange, offset, durationSince
   case isInRange x₁ x₂ h₆ h₇ | offset x₁ x₂ h₆ h₇ | durationSince x₁ x₂ h₆ h₇ =>
     simp only [List.map_cons, List.map_nil]
@@ -93,7 +99,56 @@ theorem partial_eval_well_typed_call {env : TypeEnv} {xfn : ExtFun} {args : List
   PEWellTyped env (Residual.call xfn args ty) (TPE.evaluate (Residual.call xfn args ty) preq pes) req preq es pes
 := by
   intros h_args_wt h_wf h_ref h_wt
-  simp only [TPE.evaluate, TPE.call, List.any_eq_true]
+  by_cases hif : xfn = .ifError ∧ ∃ x₁ x₂, args = [x₁, x₂]
+  · -- `iferror`: every result shape is well-typed at the call's type
+    obtain ⟨hxfn, x₁, x₂, hxs⟩ := hif
+    subst hxfn hxs
+    cases h_wt with
+    | call hargs hxfn =>
+    cases hxfn with
+    | ifError hty₁ hty₂ =>
+    have hwt₁ := h_args_wt x₁ (by simp)
+    have hwt₂ := h_args_wt x₂ (by simp)
+    have hpt₁ := partial_eval_preserves_typeof x₁ (hargs x₁ (by simp)) preq pes
+    have hpt₂ := partial_eval_preserves_typeof x₂ (hargs x₂ (by simp)) preq pes
+    generalize hr₁ : TPE.evaluate x₁ preq pes = r₁ at hwt₁ hpt₁
+    generalize hr₂ : TPE.evaluate x₂ preq pes = r₂ at hwt₂ hpt₂
+    simp only [TPE.evaluate, hr₁, hr₂]
+    split
+    · -- a value: its boolean, or a type error
+      split
+      · exact well_typed_bool
+      · exact Residual.WellTyped.error
+    · -- an error: the fallback
+      rename_i ty₁
+      split
+      · split
+        · exact well_typed_bool
+        · exact Residual.WellTyped.error
+      · exact Residual.WellTyped.error
+      · apply Residual.WellTyped.call
+        · intro x hx
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+          rcases hx with hx | hx
+          · subst hx ; exact Residual.WellTyped.error
+          · subst hx ; exact hwt₂
+        · change ty₁ = x₁.typeOf at hpt₁
+          apply ExtResidualWellTyped.ifError
+          · change ty₁ = _
+            exact hpt₁.trans hty₁
+          · exact hpt₂.trans hty₂
+    · -- a residual: the call stays, with its fallback untouched
+      apply Residual.WellTyped.call
+      · intro x hx
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hx
+        rcases hx with hx | hx
+        · subst hx ; exact hwt₁
+        · subst hx ; exact hargs _ (by simp)
+      · apply ExtResidualWellTyped.ifError
+        · exact hpt₁.trans hty₁
+        · exact hty₂
+  rw [Cedar.TPE.evaluate.eq_14 _ _ _ _ _ (fun x₁ x₂ h₁ h₂ => hif ⟨h₁, x₁, x₂, h₂⟩)]
+  simp only [TPE.call, List.any_eq_true]
   simp only [List.map₁, List.attach, List.attachWith, List.map_subtype, List.mapM_map, List.mem_map, List.mem_unattach, List.mem_pmap, Subtype.mk.injEq, exists_prop, exists_eq_right, and_self]
   unfold Function.comp
   simp only [List.map_subtype, List.mem_map, List.mem_unattach, List.mem_pmap, Subtype.mk.injEq, exists_prop, exists_eq_right, and_self]
@@ -234,6 +289,11 @@ theorem partial_eval_well_typed_call {env : TypeEnv} {xfn : ExtFun} {args : List
         simp [InstanceOfExtType]
       | exact well_typed_int
     case h_23 =>
+      -- the strict `iferror` body: a boolean at the call's (boolean) type
+      cases h₃
+      simp only [someOrError, Except.toOption]
+      exact well_typed_bool
+    case h_24 =>
       simp only [someOrError, Except.toOption]
       apply Residual.WellTyped.error
   case h_2 x h₂ =>

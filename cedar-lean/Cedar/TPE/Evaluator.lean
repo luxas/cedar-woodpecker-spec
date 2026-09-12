@@ -212,6 +212,27 @@ def evaluate
     set (xs.map₁ (λ ⟨x₁, _⟩ => evaluate x₁ req es)) ty
   | .record axs ty =>
     record (axs.map₁ (λ ⟨(a, x₁), _⟩ => (a, (evaluate x₁ req es)))) ty
+  -- `iferror(e, d)` coalesces `e`'s error into `d`'s boolean (mirrors the
+  -- Rust type-aware partial evaluator): a value gives its boolean, an error
+  -- gives `d` partially evaluated, and anything else keeps the call with `d`
+  -- untouched.
+  | .call .ifError [x₁, x₂] ty =>
+    match evaluate x₁ req es with
+    | .val v _ =>
+      match v with
+      | .prim (.bool b) => .val (.prim (.bool b)) ty
+      | _ => .error ty
+    | .error ty₁ =>
+      match evaluate x₂ req es with
+      | .val v _ =>
+        match v with
+        | .prim (.bool b) => .val (.prim (.bool b)) ty
+        | _ => .error ty
+      | .error _ => .error ty
+      -- a partial fallback stays inside the call, so the residual keeps the
+      -- call's type annotation
+      | r₂ => .call .ifError [.error ty₁, r₂] ty
+    | r₁ => .call .ifError [r₁, x₂] ty
   | .call xfn xs ty =>
     call xfn (xs.map₁ (λ ⟨x₁, _⟩ => evaluate x₁ req es)) ty
 termination_by x

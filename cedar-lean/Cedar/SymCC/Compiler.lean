@@ -221,6 +221,14 @@ def compileCallWithError₂ (xty₁ xty₂ : ExtType) (enc : Term → Term → T
 def compileCall₂ (xty : ExtType) (enc : Term → Term → Term) (t₁ t₂ : Term) : Result Term :=
   compileCallWithError₂ xty xty (λ t₁ t₂ => ⊙ enc t₁ t₂) t₁ t₂
 
+/-- Symbolic `iferror(e, d)`: an error is a `none` term, so the result is `d`
+where `e` is `none` and `e` otherwise. Both arguments must be `Option Bool`
+terms. -/
+def compileIfError (t₁ t₂ : Term) : Result Term :=
+  if t₁.typeOf = .option .bool ∧ t₂.typeOf = .option .bool
+  then .ok (ite (isNone t₁) t₂ t₁)
+  else .error .typeError
+
 def compileCall (xfn : ExtFun) (ts : List Term) : Result Term := do
   match xfn, ts with
   | .decimal, [t₁]                => compileCall₀ Ext.Decimal.decimal t₁
@@ -245,6 +253,7 @@ def compileCall (xfn : ExtFun) (ts : List Term) : Result Term := do
   | .toMinutes, [t₁]              => compileCall₁ .duration Duration.toMinutes t₁
   | .toHours, [t₁]                => compileCall₁ .duration Duration.toHours t₁
   | .toDays, [t₁]                 => compileCall₁ .duration Duration.toDays t₁
+  | .ifError, [t₁, t₂]            => compileIfError t₁ t₂
   | _, _                          => .error .typeError
 
 /--
