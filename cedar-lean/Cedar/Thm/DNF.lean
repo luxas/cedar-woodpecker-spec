@@ -25,6 +25,7 @@ import Cedar.Thm.DNF.HoistSpec
 import Cedar.Thm.DNF.SplitSound
 import Cedar.Thm.DNF.SplitCond
 import Cedar.Thm.DNF.SplitPolicyThm
+import Cedar.Thm.DNF.Combine
 import Cedar.Thm.DNF.Wildcard
 import Cedar.Thm.DNF.Like
 import Cedar.Thm.DNF.IfError
@@ -53,6 +54,7 @@ Main results:
   under any valuation. Together with the master invariant's no-err clauses
   (which make a true cube never coexist with an erring one), this is why the
   cubes' order does not matter.
+
 For the Step 2 atom splitter modeled in `Cedar.DNF.Split`:
 
 * `Cedar.DNF.evaluate_splitAtoms` — splitting the atoms preserves evaluation
@@ -86,12 +88,14 @@ For the `iferror` operator (Step 4, part 1), in `Cedar.Thm.DNF.IfError`:
   `iferror(e, false)` is `true` exactly when `e` is, and its negation is
   `true` exactly when `e` is not `true` (hypothesis-free / for boolean-or-
   error `e`): the shape Step 4 moves deny terms with.
+
 For the Phase 4 Step 1 aggregate elimination modeled in `Cedar.DNF.Elim`:
 
 * `Cedar.DNF.evaluate_eliminate` / `evaluate_normalize` — eliminating record
   and set literals from the atoms (and the split → eliminate → split pipeline)
   preserves evaluation exactly, under the `Typed` hypothesis (set-typed
   `containsAll`/`containsAny` operands, entity-typed `in` operands).
+
 For the set quantifier-elimination matrix (Phase 4, plan 13), in
 `Cedar.Thm.DNF.SetQE` — no model yet, the table a later pass implements:
 
