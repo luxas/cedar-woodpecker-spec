@@ -30,6 +30,7 @@ import Cedar.Thm.DNF.ElimChains
 import Cedar.Thm.DNF.ElimRules
 import Cedar.Thm.DNF.EvalOrder
 import Cedar.Thm.DNF.ElimSound
+import Cedar.Thm.DNF.SetQE
 
 /-!
 Machine-checked equivalence of the DNF converter modeled in `Cedar.DNF`
@@ -79,4 +80,16 @@ For the Phase 4 Step 1 aggregate elimination modeled in `Cedar.DNF.Elim`:
   and set literals from the atoms (and the split → eliminate → split pipeline)
   preserves evaluation exactly, under the `Typed` hypothesis (set-typed
   `containsAll`/`containsAny` operands, entity-typed `in` operands).
+For the set quantifier-elimination matrix (Phase 4, plan 13), in
+`Cedar.Thm.DNF.SetQE` — no model yet, the table a later pass implements:
+
+* `Cedar.DNF.qe_<left>_<right>` — the 81 cells: two ANDed Cedar set atoms
+  sharing an existentially quantified set or element are one Cedar operation
+  over the remaining variables (`↔`, on well-formed sets, with the domain
+  hypothesis a cell needs stated explicitly); the `_over` lemmas are the
+  unconditional `⇒` directions;
+* `Cedar.DNF.qe_nsup_i_inexpressible`, `qe_c_nsup_inexpressible`,
+  `qe_nc_i_inexpressible` — the three cells no boolean combination of Cedar
+  atoms over the free variables expresses, by distinguishing pairs; their
+  exact set-theoretic forms are `qe_nsup_i_iff`, `qe_c_nsup_lit`, `qe_nc_i_lit`.
 -/
