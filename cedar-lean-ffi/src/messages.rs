@@ -947,6 +947,20 @@ impl proto::LikeCheckRequest {
     }
 }
 
+impl proto::CombineCheckRequest {
+    pub(crate) fn new(
+        policies: &cedar_policy_core::ast::PolicySet,
+        combined: &cedar_policy_core::ast::PolicySet,
+        cubes: &cedar_policy_core::ast::PolicySet,
+    ) -> Self {
+        Self {
+            policies: Some(cedar_policy::proto::models::PolicySet::from(policies)),
+            expected_combined: Some(cedar_policy::proto::models::PolicySet::from(combined)),
+            expected_cubes: Some(cedar_policy::proto::models::PolicySet::from(cubes)),
+        }
+    }
+}
+
 impl proto::BatchedAuthorizationRequest {
     pub(crate) fn new(
         policies: &PolicySet,

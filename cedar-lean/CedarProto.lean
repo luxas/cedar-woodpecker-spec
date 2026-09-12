@@ -36,6 +36,7 @@ import CedarProto.SymCCRequest
 import CedarProto.DnfCheckRequest
 import CedarProto.SplitCheckRequest
 import CedarProto.SplitPolicyCheckRequest
+import CedarProto.CombineCheckRequest
 import CedarProto.LikeCheckRequest
 import CedarProto.SymEvalReplayRequest
 import CedarProto.TemplateBody
