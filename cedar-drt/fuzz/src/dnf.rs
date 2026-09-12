@@ -32,7 +32,9 @@ use cedar_policy_generators::abac::Type;
 use cedar_policy_generators::hierarchy::HierarchyGenerator;
 use cedar_policy_generators::schema;
 use cedar_policy_generators::schema_gen::SchemaGen;
-use cedar_policy_symcc::dnf::{DEFAULT_MAX_CUBES, Dnf, DnfError};
+use cedar_policy_symcc::dnf::{
+    DEFAULT_MAX_CUBES, DEFAULT_MAX_SPLIT_NODES, Dnf, DnfError, split_atoms,
+};
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use log::debug;
 
@@ -121,6 +123,36 @@ pub fn test_dnf_vs_lean(ffi: &CedarLeanFfi, expression: &Expr) -> Verdict {
     }
 }
 
+/// Runs the Rust atom splitter and the Lean model on `expression` and
+/// compares the outputs structurally. Panics on a mismatch; a Rust-side
+/// resource limit is a benign skip (the Lean model has no budgets).
+pub fn test_split_vs_lean(ffi: &CedarLeanFfi, expression: &Expr) -> Verdict {
+    let split = match split_atoms(expression, DEFAULT_MAX_SPLIT_NODES) {
+        Ok(split) => split,
+        Err(e @ (DnfError::TooLarge { .. } | DnfError::RecursionLimit)) => {
+            return Skip::Benign(format!("the Rust split hit a resource limit: {e}")).into();
+        }
+        Err(e @ DnfError::Unsupported(_)) => {
+            // With `tolerant-ast` off, `Unsupported` can only mean a Rust
+            // invariant breach (a rebuild lost or duplicated a child) — the
+            // very bug class this DRT exists to catch.
+            panic!("the Rust split violated an invariant on `{expression}`: {e}");
+        }
+    };
+    debug!("Rust split: {split}\n");
+    match ffi.run_split_check(expression, &split) {
+        Ok(result) => {
+            assert!(
+                result.agrees,
+                "the Rust split and the Lean model disagree on `{expression}`:\n  Rust: {}\n  Lean: {}",
+                result.expected, result.actual
+            );
+            Verdict::Checked
+        }
+        Err(e) => panic!("the Lean FFI call failed on `{expression}`: {e}"),
+    }
+}
+
 #[cfg(test)]
 mod test {
     use std::collections::HashMap;
@@ -190,6 +222,125 @@ mod test {
                 continue;
             };
             match test_dnf_vs_lean(&ffi, &input.expression) {
+                Verdict::Checked => checked += 1,
+                Verdict::Skipped(_) => *skipped.entry("skipped").or_default() += 1,
+            }
+            if checked >= wanted {
+                break;
+            }
+        }
+        eprintln!("checked {checked} inputs; skipped: {skipped:?}");
+        assert!(
+            checked >= wanted,
+            "only {checked} of {wanted} wanted inputs were checked; skipped: {skipped:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod split_test {
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
+    use cedar_policy::Expression;
+    use rand::{Rng, SeedableRng};
+
+    use super::*;
+    use crate::symeval::Verdict;
+    use libfuzzer_sys::arbitrary::{Arbitrary, Unstructured};
+
+    fn expr(text: &str) -> Expr {
+        Expression::from_str(text).unwrap().as_ref().clone()
+    }
+
+    /// Hand-picked expressions covering the splitter's interesting paths:
+    /// `if`s at any position inside atoms (including nested in the hoisted
+    /// test), boolean structure under `==` and inside set/record literals,
+    /// `lit == lit` folds (same and cross type), already-clean no-ops, and
+    /// the guards: left siblings at one and two levels, a record whose second
+    /// field holds the offender, literal and variable siblings (never
+    /// guarded), an opaque `iferror` sibling, and a guard re-derived by the
+    /// split of a substituted atom.
+    #[test]
+    fn split_lean_fixed_cases() {
+        let ffi = CedarLeanFfi::new();
+        let cases = [
+            "true",
+            "context.a",
+            "context.a && context.b",
+            "(if context.a then 1 else 2) == 1",
+            "(if context.a then 1 else 2) == 3",
+            "context.n == (if context.a then 1 else 2)",
+            "(context.a && context.b) == context.c",
+            "(context.a && context.b) == (context.c || context.d)",
+            "[context.a && context.b].contains(context.c)",
+            "{f: context.a || context.b} == context.r",
+            "{a: context.x && context.y, b: context.z && context.w} == context.r",
+            "(if (if context.a then context.b else false) then 1 else 2) == 1",
+            "context.a && (if context.b && context.c then context.u else context.v).d == 1",
+            "1 == 2 || context.a",
+            "\"x\" == 1 || context.a",
+            "(if context.a then {b: [context.c && context.d]} else context.r).b == [true]",
+            "context.a && !(context.b == context.c)",
+            // a boolean-node operand of `==` is hoisted like any other
+            // offender (plan 10; an earlier experiment made them opaque, since reverted), as are an
+            // `if` operand and deeper structure inside an operand
+            "!context.a == context.b",
+            "(if context.a then context.b else context.c) == context.d",
+            "[context.a && context.b].contains(context.c) == context.d",
+            // guards (the `iferror` sibling's equality hoists an `if`
+            // operand: an equality of booleans is opaque)
+            "context.m < context.n + (if context.a then 1 else 2)",
+            "{a: context.x, b: context.y && context.z} == context.r",
+            "[1, principal, context.n, if context.a then 2 else 3].contains(context.m)",
+            "iferror(context.a, false) == (if context.b && context.c then true else false)",
+            "context.n == (if context.a then (if context.b then 1 else 2) else 3)",
+            // an opaque equality of booleans as a left sibling is a guard whole
+            "((context.a && context.b) == [context.c || context.d].contains(context.u))
+             == (if context.v then true else false)",
+            "[context.k, context.n + (if context.a then 1 else 2)].contains(context.m)",
+            // siblings that cannot err (after folding) get no guard
+            "[\"x\", \"y\"].contains(if context.a then context.s else \"z\")",
+            "((if context.a then 1 else 2) == 1) == (context.b || context.c)",
+            "[{a: 1}, {a: principal}].contains(if context.a then context.r else {a: 2})",
+            // two identical erring siblings: guarded once
+            "[context.n, context.n, if context.a then 1 else 2].contains(context.m)",
+            // an offender inside an opaque `iferror` call stays put, as an
+            // atom and at structure position
+            "iferror(context.a && context.b, false) == context.c",
+            "iferror(context.a && context.b, false)",
+            // a set or record literal sibling contributes its elements' guards
+            "[context.n, 7].containsAll(if context.a then [1] else [2])",
+            "{a: context.n, b: context.s} == (if context.a then context.r else context.q)",
+            // guards learned from an `&&`'s left operand and an `if`'s test
+            "context.n == context.n && context.n == (if context.a then 1 else 2)",
+            "if context.n == context.n then context.n == (if context.a then 1 else 2) else context.b",
+        ];
+        for text in cases {
+            let expression = expr(text);
+            match test_split_vs_lean(&ffi, &expression) {
+                Verdict::Checked => {}
+                Verdict::Skipped(skip) => panic!("`{text}` was skipped: {skip:?}"),
+            }
+        }
+    }
+
+    /// Exercises the target's plumbing on generated inputs from a fixed seed.
+    #[test]
+    fn split_lean_target_smoke() {
+        let ffi = CedarLeanFfi::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x5b117_5eed);
+        let (wanted, max_attempts) = (30, 2_000);
+        let mut checked = 0;
+        let mut skipped: HashMap<&'static str, usize> = HashMap::new();
+        for _ in 0..max_attempts {
+            let mut bytes = vec![0u8; 1 << 14];
+            rng.fill_bytes(&mut bytes);
+            let Ok(input) = DnfFuzzTargetInput::arbitrary(&mut Unstructured::new(&bytes)) else {
+                *skipped.entry("not generated").or_default() += 1;
+                continue;
+            };
+            match test_split_vs_lean(&ffi, &input.expression) {
                 Verdict::Checked => checked += 1,
                 Verdict::Skipped(_) => *skipped.entry("skipped").or_default() += 1,
             }
