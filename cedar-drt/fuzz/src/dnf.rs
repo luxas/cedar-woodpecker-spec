@@ -28,14 +28,16 @@
 
 use cedar_lean_ffi::CedarLeanFfi;
 use cedar_policy_core::ast::Expr;
+use cedar_policy_generators::abac::ABACRequest;
 use cedar_policy_generators::abac::Type;
 use cedar_policy_generators::hierarchy::HierarchyGenerator;
 use cedar_policy_generators::schema;
 use cedar_policy_generators::schema_gen::SchemaGen;
 use cedar_policy_symcc::dnf::{
-    DEFAULT_MAX_CUBES, DEFAULT_MAX_SPLIT_NODES, Dnf, DnfError, likes_have_wildcards, rewrite_like,
-    split_atoms,
+    DEFAULT_MAX_CUBES, DEFAULT_MAX_SPLIT_NODES, Dnf, DnfError, likes_have_wildcards,
+    normalize_atoms, rewrite_like, split_atoms,
 };
+use cedar_policy_symcc::evaluator::request_env_of;
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
 use log::debug;
 
@@ -86,7 +88,12 @@ fn check_one(ffi: &CedarLeanFfi, expression: &Expr, can_error_all: bool) -> Verd
         Err(e @ (DnfError::TooLarge { .. } | DnfError::RecursionLimit)) => {
             return Skip::Benign(format!("the Rust conversion hit a resource limit: {e}")).into();
         }
-        Err(e @ DnfError::Unsupported(_)) => {
+        Err(
+            e @ (DnfError::Unsupported(_)
+            | DnfError::NotWellTyped { .. }
+            | DnfError::RequestEnvNotFound(_)
+            | DnfError::Typecheck(_)),
+        ) => {
             // With `tolerant-ast` off, `Unsupported` can only mean a Rust
             // invariant breach (a rebuild lost or duplicated a child) — the
             // very bug class this DRT exists to catch.
@@ -124,6 +131,89 @@ pub fn test_dnf_vs_lean(ffi: &CedarLeanFfi, expression: &Expr) -> Verdict {
     }
 }
 
+/// Input to `elim-lean-drt`: a schema, a request (for its environment) and
+/// a (mostly) well-typed boolean expression; the pipeline typechecks the
+/// expression in that environment and an ill-typed one is a benign skip.
+#[derive(Debug, Clone)]
+pub struct ElimFuzzTargetInput {
+    /// generated schema
+    pub schema: schema::Schema,
+    /// generated request
+    pub request: ABACRequest,
+    /// generated boolean expression
+    pub expression: Expr,
+}
+
+impl<'a> Arbitrary<'a> for ElimFuzzTargetInput {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        let schema = schema::Schema::arbitrary(SETTINGS.clone(), u)?;
+        let hierarchy = schema.arbitrary_hierarchy(u)?;
+        let expression = schema
+            .exprgenerator(Some(&hierarchy))
+            .generate_expr_for_type(&Type::bool(), SETTINGS.max_depth, u)?;
+        let request = schema.arbitrary_request(&hierarchy, u)?;
+        Ok(Self {
+            schema,
+            request,
+            expression,
+        })
+    }
+
+    fn try_size_hint(
+        depth: usize,
+    ) -> arbitrary::Result<(usize, Option<usize>), arbitrary::MaxRecursionReached> {
+        Ok(arbitrary::size_hint::and_all(&[
+            schema::Schema::arbitrary_size_hint(depth)?,
+            HierarchyGenerator::size_hint(depth),
+            schema::Schema::arbitrary_request_size_hint(depth),
+        ]))
+    }
+}
+
+/// Runs the Rust normalization pipeline (`normalize_atoms`: split, eliminate
+/// record and set literals, split again) and the Lean model on the input's
+/// expression and compares the outputs structurally. Panics on a mismatch;
+/// an ill-typed expression (the pipeline's precondition), a request outside
+/// the schema and a Rust-side resource limit are benign skips.
+pub fn test_elim_vs_lean(ffi: &CedarLeanFfi, input: &ElimFuzzTargetInput) -> Verdict {
+    let expression = &input.expression;
+    let Ok(schema) = cedar_policy::Schema::try_from(input.schema.clone()) else {
+        return Skip::Benign("the generated schema does not convert".into()).into();
+    };
+    let request: cedar_policy::Request = input.request.clone().into();
+    let Some(env) = request_env_of(&request, &schema) else {
+        return Skip::Benign("the request has no environment in the schema".into()).into();
+    };
+    let normalized = match normalize_atoms(expression, &schema, &env, DEFAULT_MAX_SPLIT_NODES) {
+        Ok(normalized) => normalized,
+        Err(DnfError::NotWellTyped { .. }) => {
+            return Skip::Benign("the expression is not well typed".into()).into();
+        }
+        Err(e @ (DnfError::RequestEnvNotFound(_) | DnfError::Typecheck(_))) => {
+            return Skip::Benign(format!("the Rust typecheck could not run: {e}")).into();
+        }
+        Err(e @ (DnfError::TooLarge { .. } | DnfError::RecursionLimit)) => {
+            return Skip::Benign(format!("the Rust normalization hit a resource limit: {e}"))
+                .into();
+        }
+        Err(e @ DnfError::Unsupported(_)) => {
+            panic!("the Rust normalization violated an invariant on `{expression}`: {e}");
+        }
+    };
+    debug!("Rust normalization: {normalized}\n");
+    match ffi.run_elim_check(expression, &normalized) {
+        Ok(result) => {
+            assert!(
+                result.agrees,
+                "the Rust normalization and the Lean model disagree on `{expression}`:\n  Rust: {}\n  Lean: {}",
+                result.expected, result.actual
+            );
+            Verdict::Checked
+        }
+        Err(e) => panic!("the Lean FFI call failed on `{expression}`: {e}"),
+    }
+}
+
 /// Runs the Rust atom splitter and the Lean model on `expression` and
 /// compares the outputs structurally. Panics on a mismatch; a Rust-side
 /// resource limit is a benign skip (the Lean model has no budgets).
@@ -133,7 +223,12 @@ pub fn test_split_vs_lean(ffi: &CedarLeanFfi, expression: &Expr) -> Verdict {
         Err(e @ (DnfError::TooLarge { .. } | DnfError::RecursionLimit)) => {
             return Skip::Benign(format!("the Rust split hit a resource limit: {e}")).into();
         }
-        Err(e @ DnfError::Unsupported(_)) => {
+        Err(
+            e @ (DnfError::Unsupported(_)
+            | DnfError::NotWellTyped { .. }
+            | DnfError::RequestEnvNotFound(_)
+            | DnfError::Typecheck(_)),
+        ) => {
             // With `tolerant-ast` off, `Unsupported` can only mean a Rust
             // invariant breach (a rebuild lost or duplicated a child) — the
             // very bug class this DRT exists to catch.
@@ -353,6 +448,137 @@ mod split_test {
         assert!(
             checked >= wanted,
             "only {checked} of {wanted} wanted inputs were checked; skipped: {skipped:?}"
+        );
+    }
+}
+
+#[cfg(test)]
+mod elim_test {
+    use std::collections::HashMap;
+    use std::str::FromStr;
+
+    use cedar_policy::Expression;
+    use rand::{Rng, SeedableRng};
+
+    use super::*;
+    use crate::symeval::Verdict;
+    use libfuzzer_sys::arbitrary::{Arbitrary, Unstructured};
+
+    /// A schema and request for the fixed cases: `User` principals with a
+    /// `Long` `n`, a `String` `s`, a set of strings `tags` and a record
+    /// `r {x: Long}`, viewing `Doc` resources with a `Long` `level`.
+    fn fixture() -> (cedar_policy::Schema, cedar_policy::RequestEnv) {
+        let schema = cedar_policy::Schema::from_cedarschema_str(
+            r#"
+            entity User in [Group] { n: Long, s: String, tags: Set<String>, r: { x: Long },
+                                     rs: Set<{ x: Long }> };
+            entity Group;
+            entity Doc { level: Long };
+            action view appliesTo { principal: User, resource: Doc };
+            "#,
+        )
+        .unwrap()
+        .0;
+        let env = cedar_policy::RequestEnv::new(
+            "User".parse().unwrap(),
+            r#"Action::"view""#.parse().unwrap(),
+            "Doc".parse().unwrap(),
+        );
+        (schema, env)
+    }
+
+    fn expr(text: &str) -> Expr {
+        Expression::from_str(text).unwrap().as_ref().clone()
+    }
+
+    /// Hand-picked expressions covering every rule and the guards: `.attr`,
+    /// `has` and `==` on record literals (nested too), `contains`,
+    /// `containsAll`, `containsAny` (both sides), `isEmpty` and `in` on set
+    /// literals, a rewritten node under an erring node, a rule's output
+    /// meeting literals again, an opaque `iferror`, and the untouched
+    /// `<set>.contains(<record>)` shape via a non-literal set.
+    #[test]
+    fn elim_lean_fixed_cases() {
+        let ffi = CedarLeanFfi::new();
+        let (schema, env) = fixture();
+        let cases = [
+            "{x: principal.n, y: principal.s}.x == 3",
+            "{x: {y: principal.n}}.x.y == 1",
+            "{x: 1} has x",
+            "{x: principal.n, y: 1} == {x: 3, y: 1}",
+            "{x: {y: principal.n}} == {x: {y: 2}}",
+            "[principal.s, \"x\"].contains(principal.s)",
+            "[1, 2].containsAll([principal.n])",
+            "principal.tags.containsAll([\"a\", principal.s])",
+            "[principal.n].containsAny([resource.level, 7])",
+            "[\"a\"].containsAny(principal.tags)",
+            "[principal.n].isEmpty()",
+            "principal in [Group::\"g1\", Group::\"g2\"]",
+            "({x: principal.n}.x + 1) == resource.level + 1",
+            "principal.r == {x: principal.n}",
+            "iferror({x: principal.n}.x == 1, false)",
+            "principal.n == 1 && {x: principal.n}.x == resource.level",
+            "if {x: principal.n} has x then principal.n == 1 else principal.s == \"a\"",
+            // `has` false; a record and a set literal above a rewritten child
+            // without a rule of their own (an extension call with a rewritten
+            // argument never typechecks: constructors take literals);
+            // `contains` on a set of record literals; and the one shape that
+            // stays, a non-literal set of records
+            "{x: 1} has y",
+            "{x: {y: principal.n}.y} == principal.r",
+            "[{x: principal.n}.x] == [resource.level]",
+            "[{x: 1}, {x: 2}].contains({x: principal.n})",
+            "principal.rs.contains({x: principal.n})",
+            // set equality with a literal side: on the right, on the left,
+            // both, and nested in a record field and a `contains` element
+            r#"principal.tags == ["a", principal.s]"#,
+            r#"[principal.s, "b"] == principal.tags"#,
+            r#"[principal.s, "a"] == ["a", principal.s]"#,
+            r#"{x: principal.tags} == {x: [principal.s]}"#,
+            r#"[[principal.s]].contains(principal.tags)"#,
+        ];
+        for text in cases {
+            let expression = expr(text);
+            let normalized =
+                normalize_atoms(&expression, &schema, &env, DEFAULT_MAX_SPLIT_NODES).unwrap();
+            match ffi.run_elim_check(&expression, &normalized) {
+                Ok(result) => assert!(
+                    result.agrees,
+                    "`{text}`:\n  Rust: {}\n  Lean: {}",
+                    result.expected, result.actual
+                ),
+                Err(e) => panic!("`{text}`: {e}"),
+            }
+        }
+    }
+
+    /// Exercises the target's plumbing on generated inputs from a fixed seed.
+    #[test]
+    fn elim_lean_target_smoke() {
+        let ffi = CedarLeanFfi::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0xe11_5eed);
+        let (wanted, max_attempts) = (30, 4_000);
+        let mut checked = 0;
+        let mut skipped: HashMap<&'static str, usize> = HashMap::new();
+        for _ in 0..max_attempts {
+            let mut bytes = vec![0u8; 1 << 14];
+            rng.fill_bytes(&mut bytes);
+            let Ok(input) = ElimFuzzTargetInput::arbitrary(&mut Unstructured::new(&bytes)) else {
+                *skipped.entry("not generated").or_default() += 1;
+                continue;
+            };
+            match test_elim_vs_lean(&ffi, &input) {
+                Verdict::Checked => checked += 1,
+                Verdict::Skipped(_) => *skipped.entry("skipped").or_default() += 1,
+            }
+            if checked >= wanted {
+                break;
+            }
+        }
+        eprintln!("checked {checked} inputs; skipped: {skipped:?}");
+        assert!(
+            checked >= wanted,
+            "only {checked} of {wanted} inputs were checked; skipped: {skipped:?}"
         );
     }
 }
