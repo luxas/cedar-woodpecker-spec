@@ -17,6 +17,7 @@
 pub use libfuzzer_sys::fuzz_target;
 
 pub mod abac;
+pub mod dnf;
 pub mod iferror;
 pub mod props;
 pub mod proto_gen;

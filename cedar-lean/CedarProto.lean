@@ -33,6 +33,7 @@ import CedarProto.Request
 import CedarProto.RequestValidationRequest
 import CedarProto.Schema
 import CedarProto.SymCCRequest
+import CedarProto.DnfCheckRequest
 import CedarProto.SymEvalReplayRequest
 import CedarProto.TemplateBody
 import CedarProto.Term

@@ -588,6 +588,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "dnf-lean-drt"
+path = "fuzz_targets/dnf-lean-drt.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "symcc-evaluator-lean-drt"
 path = "fuzz_targets/symcc-evaluator-lean-drt.rs"
 test = false

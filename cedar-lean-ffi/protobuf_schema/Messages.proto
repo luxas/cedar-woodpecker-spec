@@ -327,6 +327,17 @@ message SymEvalReplayRequest {
     Asserts ce_base = 10;
 }
 
+// A Rust DNF conversion to check against the Lean model (`Cedar.DNF.dnf`).
+message DnfCheckRequest {
+    // The input expression.
+    cedar_policy_core.Expr expr = 1;
+    // The Rust result: `Dnf::of(expr, can_error, DEFAULT_MAX_CUBES).to_expr()`.
+    cedar_policy_core.Expr expected = 2;
+    // Whether `can_error` answered `true` for every atom (`Dnf::of_expr`) or
+    // `false` for every atom — the two closure-free extremes.
+    bool can_error_all = 3;
+}
+
 // Partial Authorization Messages
 message PartialEntityUID {
     cedar_policy_core.Name ty = 1;
