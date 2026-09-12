@@ -26,6 +26,10 @@ import Cedar.Thm.DNF.SplitSound
 import Cedar.Thm.DNF.Wildcard
 import Cedar.Thm.DNF.Like
 import Cedar.Thm.DNF.IfError
+import Cedar.Thm.DNF.ElimChains
+import Cedar.Thm.DNF.ElimRules
+import Cedar.Thm.DNF.EvalOrder
+import Cedar.Thm.DNF.ElimSound
 
 /-!
 Machine-checked equivalence of the DNF converter modeled in `Cedar.DNF`
@@ -69,4 +73,10 @@ For the `iferror` operator (Step 4, part 1), in `Cedar.Thm.DNF.IfError`:
   `iferror(e, false)` is `true` exactly when `e` is, and its negation is
   `true` exactly when `e` is not `true` (hypothesis-free / for boolean-or-
   error `e`): the shape Step 4 moves deny terms with.
+For the Phase 4 Step 1 aggregate elimination modeled in `Cedar.DNF.Elim`:
+
+* `Cedar.DNF.evaluate_eliminate` / `evaluate_normalize` — eliminating record
+  and set literals from the atoms (and the split → eliminate → split pipeline)
+  preserves evaluation exactly, under the `Typed` hypothesis (set-typed
+  `containsAll`/`containsAny` operands, entity-typed `in` operands).
 -/
