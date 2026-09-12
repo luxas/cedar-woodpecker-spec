@@ -14,16 +14,19 @@
  * limitations under the License.
  */
 
-//! FFI wrapper for checking a Rust DNF conversion against the Lean model
-//! (`Cedar.DNF.dnf`).
+//! FFI wrappers for checking a Rust DNF conversion against the Lean model
+//! (`Cedar.DNF.dnf`), a Rust atom split against its (`Cedar.DNF.splitAtoms`),
+//! a Rust policy split against its (`Cedar.DNF.splitCondExprs`), and a Rust
+//! allow/deny combination against its (`Cedar.DNF.combineAllowDeny`,
+//! `Cedar.DNF.allowCubes`).
 
 use crate::datatypes::{ResultDef, TimedDef, tpe::CheckResult};
 use crate::err::FfiError;
 use crate::messages::proto;
 
 use super::{
-    CedarLeanFfi, call_lean_ffi_takes_protobuf, runCheckDnf, runCheckElim, runCheckLike,
-    runCheckSplit, runCheckSplitPolicy,
+    CedarLeanFfi, call_lean_ffi_takes_protobuf, runCheckCombine, runCheckDnf, runCheckElim,
+    runCheckLike, runCheckSplit, runCheckSplitPolicy,
 };
 
 impl CedarLeanFfi {
@@ -122,6 +125,35 @@ impl CedarLeanFfi {
             call_lean_ffi_takes_protobuf(
                 runCheckSplitPolicy,
                 &proto::SplitPolicyCheckRequest::new(expr, expected),
+            )
+        };
+        match response
+            .as_borrowed()
+            .deserialize_into::<ResultDef<TimedDef<CheckResult>>>()?
+        {
+            ResultDef::Ok(resp) => Ok(resp.data),
+            ResultDef::Error(s) => Err(FfiError::LeanBackendError(s)),
+        }
+    }
+}
+
+impl CedarLeanFfi {
+    /// Checks a Rust allow/deny combination against the Lean model: the
+    /// model recomputes `combineAllowDeny` and `allowCubes` of `policies`
+    /// and compares them, policy by policy in id order, with `combined`
+    /// (the Rust `combine_allow_deny`) and `cubes` (the Rust
+    /// `allow_cubes`), after canonicalizing record-field order on both
+    /// sides.
+    pub fn run_combine_check(
+        &self,
+        policies: &cedar_policy_core::ast::PolicySet,
+        combined: &cedar_policy_core::ast::PolicySet,
+        cubes: &cedar_policy_core::ast::PolicySet,
+    ) -> Result<CheckResult, FfiError> {
+        let response = unsafe {
+            call_lean_ffi_takes_protobuf(
+                runCheckCombine,
+                &proto::CombineCheckRequest::new(policies, combined, cubes),
             )
         };
         match response

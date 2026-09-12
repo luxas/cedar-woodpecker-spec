@@ -570,12 +570,6 @@ test = false
 doc = false
 
 [[bin]]
-name = "like-lean-drt"
-path = "fuzz_targets/like-lean-drt.rs"
-test = false
-doc = false
-
-[[bin]]
 name = "elim-lean-drt"
 path = "fuzz_targets/elim-lean-drt.rs"
 test = false
@@ -584,6 +578,18 @@ doc = false
 [[bin]]
 name = "split-policies-lean-drt"
 path = "fuzz_targets/split-policies-lean-drt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "combine-lean-drt"
+path = "fuzz_targets/combine-lean-drt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "like-lean-drt"
+path = "fuzz_targets/like-lean-drt.rs"
 test = false
 doc = false
 
@@ -606,12 +612,6 @@ test = false
 doc = false
 
 [[bin]]
-name = "symcc-evaluator-tpe-drt"
-path = "fuzz_targets/symcc-evaluator-tpe-drt.rs"
-test = false
-doc = false
-
-[[bin]]
 name = "dnf-lean-drt"
 path = "fuzz_targets/dnf-lean-drt.rs"
 test = false
@@ -620,6 +620,12 @@ doc = false
 [[bin]]
 name = "symcc-evaluator-lean-drt"
 path = "fuzz_targets/symcc-evaluator-lean-drt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "symcc-evaluator-tpe-drt"
+path = "fuzz_targets/symcc-evaluator-tpe-drt.rs"
 test = false
 doc = false
 

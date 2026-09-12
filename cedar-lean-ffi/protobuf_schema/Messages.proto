@@ -361,6 +361,16 @@ message LikeCheckRequest {
     cedar_policy_core.Expr expected = 2;
 }
 
+// A Rust allow/deny combination to check against the Lean model
+// (`Cedar.DNF.combineAllowDeny`, `Cedar.DNF.allowCubes`): the policy set,
+// the allow-only set `combine_allow_deny` produced and the cube policies
+// `allow_cubes` produced.
+message CombineCheckRequest {
+    cedar_policy_core.PolicySet policies = 1;
+    cedar_policy_core.PolicySet expected_combined = 2;
+    cedar_policy_core.PolicySet expected_cubes = 3;
+}
+
 // Partial Authorization Messages
 message PartialEntityUID {
     cedar_policy_core.Name ty = 1;

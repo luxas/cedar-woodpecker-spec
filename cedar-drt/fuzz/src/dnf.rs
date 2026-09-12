@@ -14,17 +14,18 @@
  * limitations under the License.
  */
 
-//! Support for the `dnf-lean-drt` fuzz target: differential testing of the
-//! Rust DNF converter (`cedar_policy_symcc::dnf`) against its Lean model
-//! (`Cedar.DNF` in `cedar-lean`), whose equivalence theorems are
-//! machine-checked (`Cedar.Thm.DNF`). Agreement here transfers those theorems
-//! to the Rust implementation, input by input: both sides convert the same
-//! expression and the rendered DNFs must be structurally identical.
-//!
-//! Each input is checked under both closure-free `can_error` extremes —
-//! every atom can error (`Dnf::of_expr`, which keeps exactly the never-true
-//! cubes with an uncovered node) and no atom can error (which drops every
-//! never-true cube) — so both pruning behaviours are compared.
+//! Support for the DNF-family DRT targets comparing the Rust `dnf` module
+//! against its Lean models (`cedar-spec/cedar-lean/Cedar/DNF*.lean`):
+//! `dnf-lean-drt` (Step 1, `Dnf::of` at both `can_error` extremes),
+//! `split-atoms-lean-drt` (Step 2, `split_atoms`) and
+//! `split-policies-lean-drt` (Step 3, `split_policy` — the split policies'
+//! cube conditions, in order; scope/effect/id copying is covered by the
+//! solver-checked tests in `cedar-policy-symcc/tests/dnf.rs`) and
+//! `combine-lean-drt` (Step 4, `combine_allow_deny` and `allow_cubes` — whole
+//! policy sets, compared policy by policy in id order). Every check is purely
+//! syntactic, so no request or entities are needed: the inputs are generated
+//! boolean expressions (or small policy sets of them), and the Rust output
+//! and the model's must be structurally identical up to record-field order.
 
 use cedar_lean_ffi::CedarLeanFfi;
 use cedar_policy_core::ast::{
@@ -37,8 +38,8 @@ use cedar_policy_generators::hierarchy::HierarchyGenerator;
 use cedar_policy_generators::schema;
 use cedar_policy_generators::schema_gen::SchemaGen;
 use cedar_policy_symcc::dnf::{
-    DEFAULT_MAX_CUBES, DEFAULT_MAX_SPLIT_NODES, Dnf, DnfError, likes_have_wildcards,
-    normalize_atoms, rewrite_like, split_atoms, split_policy,
+    DEFAULT_MAX_CUBES, DEFAULT_MAX_SPLIT_NODES, Dnf, DnfError, allow_cubes, combine_allow_deny,
+    likes_have_wildcards, normalize_atoms, rewrite_like, split_atoms, split_policy,
 };
 use cedar_policy_symcc::evaluator::request_env_of;
 use libfuzzer_sys::arbitrary::{self, Arbitrary, Unstructured};
@@ -244,6 +245,71 @@ pub fn test_split_vs_lean(ffi: &CedarLeanFfi, expression: &Expr) -> Verdict {
             assert!(
                 result.agrees,
                 "the Rust split and the Lean model disagree on `{expression}`:\n  Rust: {}\n  Lean: {}",
+                result.expected, result.actual
+            );
+            Verdict::Checked
+        }
+        Err(e) => panic!("the Lean FFI call failed on `{expression}`: {e}"),
+    }
+}
+
+/// Runs the Rust policy splitter on `permit(principal, action, resource)
+/// when { expression }` and compares the split policies' conditions, in
+/// order, with the Lean model's `splitCondExprs`. Panics on a mismatch; an
+/// ill-typed expression (the split validates the policy against `schema`)
+/// and a Rust-side resource limit are benign skips.
+pub fn test_split_policy_vs_lean(
+    ffi: &CedarLeanFfi,
+    schema: &cedar_policy::Schema,
+    expression: &Expr,
+) -> Verdict {
+    let policy = StaticPolicy::new(
+        PolicyID::from_string("p"),
+        None,
+        Annotations::new(),
+        Effect::Permit,
+        PrincipalConstraint::any(),
+        ActionConstraint::any(),
+        ResourceConstraint::any(),
+        Some(expression.clone()),
+    )
+    .expect("a generated expression contains no slot");
+    let split = match split_policy(
+        &policy.into(),
+        schema,
+        DEFAULT_MAX_SPLIT_NODES,
+        DEFAULT_MAX_CUBES,
+    ) {
+        Ok(split) => split,
+        Err(DnfError::NotWellTyped { .. }) => {
+            return Skip::Benign("the policy is not well typed".into()).into();
+        }
+        Err(e @ (DnfError::RequestEnvNotFound(_) | DnfError::Typecheck(_))) => {
+            return Skip::Benign(format!("the Rust typecheck could not run: {e}")).into();
+        }
+        Err(e @ (DnfError::TooLarge { .. } | DnfError::RecursionLimit)) => {
+            return Skip::Benign(format!("the Rust policy split hit a resource limit: {e}")).into();
+        }
+        Err(e @ DnfError::Unsupported(_)) => {
+            // With `tolerant-ast` off, `Unsupported` can only mean a Rust
+            // invariant breach — the very bug class this DRT exists to catch.
+            panic!("the Rust policy split violated an invariant on `{expression}`: {e}");
+        }
+    };
+    let conditions: Vec<Expr> = split
+        .iter()
+        .map(|p| {
+            p.non_scope_constraints()
+                .expect("a split policy carries its cube as its condition")
+                .clone()
+        })
+        .collect();
+    debug!("Rust policy split: {} policies\n", conditions.len());
+    match ffi.run_split_policy_check(expression, &conditions) {
+        Ok(result) => {
+            assert!(
+                result.agrees,
+                "the Rust policy split and the Lean model disagree on `{expression}`:\n  Rust: {}\n  Lean: {}",
                 result.expected, result.actual
             );
             Verdict::Checked
@@ -586,71 +652,6 @@ mod elim_test {
     }
 }
 
-/// Runs the Rust policy splitter on `permit(principal, action, resource)
-/// when { expression }` and compares the split policies' conditions, in
-/// order, with the Lean model's `splitCondExprs`. Panics on a mismatch; an
-/// ill-typed expression (the split validates the policy against `schema`)
-/// and a Rust-side resource limit are benign skips.
-pub fn test_split_policy_vs_lean(
-    ffi: &CedarLeanFfi,
-    schema: &cedar_policy::Schema,
-    expression: &Expr,
-) -> Verdict {
-    let policy = StaticPolicy::new(
-        PolicyID::from_string("p"),
-        None,
-        Annotations::new(),
-        Effect::Permit,
-        PrincipalConstraint::any(),
-        ActionConstraint::any(),
-        ResourceConstraint::any(),
-        Some(expression.clone()),
-    )
-    .expect("a generated expression contains no slot");
-    let split = match split_policy(
-        &policy.into(),
-        schema,
-        DEFAULT_MAX_SPLIT_NODES,
-        DEFAULT_MAX_CUBES,
-    ) {
-        Ok(split) => split,
-        Err(DnfError::NotWellTyped { .. }) => {
-            return Skip::Benign("the policy is not well typed".into()).into();
-        }
-        Err(e @ (DnfError::RequestEnvNotFound(_) | DnfError::Typecheck(_))) => {
-            return Skip::Benign(format!("the Rust typecheck could not run: {e}")).into();
-        }
-        Err(e @ (DnfError::TooLarge { .. } | DnfError::RecursionLimit)) => {
-            return Skip::Benign(format!("the Rust policy split hit a resource limit: {e}")).into();
-        }
-        Err(e @ DnfError::Unsupported(_)) => {
-            // With `tolerant-ast` off, `Unsupported` can only mean a Rust
-            // invariant breach — the very bug class this DRT exists to catch.
-            panic!("the Rust policy split violated an invariant on `{expression}`: {e}");
-        }
-    };
-    let conditions: Vec<Expr> = split
-        .iter()
-        .map(|p| {
-            p.non_scope_constraints()
-                .expect("a split policy carries its cube as its condition")
-                .clone()
-        })
-        .collect();
-    debug!("Rust policy split: {} policies\n", conditions.len());
-    match ffi.run_split_policy_check(expression, &conditions) {
-        Ok(result) => {
-            assert!(
-                result.agrees,
-                "the Rust policy split and the Lean model disagree on `{expression}`:\n  Rust: {}\n  Lean: {}",
-                result.expected, result.actual
-            );
-            Verdict::Checked
-        }
-        Err(e) => panic!("the Lean FFI call failed on `{expression}`: {e}"),
-    }
-}
-
 #[cfg(test)]
 mod split_policy_test {
     use std::collections::HashMap;
@@ -738,6 +739,295 @@ mod split_policy_test {
                 continue;
             };
             match test_split_policy_vs_lean(&ffi, &schema, &input.expression) {
+                Verdict::Checked => checked += 1,
+                Verdict::Skipped(_) => *skipped.entry("skipped").or_default() += 1,
+            }
+            if checked >= wanted {
+                break;
+            }
+        }
+        eprintln!("checked {checked} inputs; skipped: {skipped:?}");
+        assert!(
+            checked >= wanted,
+            "only {checked} of {wanted} wanted inputs were checked; skipped: {skipped:?}"
+        );
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct CombineFuzzTargetInput {
+    /// generated schema, which the cube split validates the policies against
+    pub schema: schema::Schema,
+    /// generated policy set
+    pub policies: cedar_policy_core::ast::PolicySet,
+}
+
+impl<'a> Arbitrary<'a> for CombineFuzzTargetInput {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        let schema = schema::Schema::arbitrary(SETTINGS.clone(), u)?;
+        let hierarchy = schema.arbitrary_hierarchy(u)?;
+        let count = u.int_in_range(1..=3)?;
+        let mut policies = cedar_policy_core::ast::PolicySet::new();
+        for i in 0..count {
+            let expression = schema
+                .exprgenerator(Some(&hierarchy))
+                .generate_expr_for_type(&Type::bool(), SETTINGS.max_depth, u)?;
+            let effect = if bool::arbitrary(u)? {
+                Effect::Permit
+            } else {
+                Effect::Forbid
+            };
+            let policy = StaticPolicy::new(
+                PolicyID::from_string(format!("p{i}")),
+                None,
+                Annotations::new(),
+                effect,
+                PrincipalConstraint::any(),
+                ActionConstraint::any(),
+                ResourceConstraint::any(),
+                Some(expression),
+            )
+            .expect("a generated expression contains no slot");
+            policies
+                .add_static(policy)
+                .expect("the ids p0, p1, … are distinct");
+        }
+        Ok(Self { schema, policies })
+    }
+
+    fn try_size_hint(
+        depth: usize,
+    ) -> arbitrary::Result<(usize, Option<usize>), arbitrary::MaxRecursionReached> {
+        Ok(arbitrary::size_hint::and_all(&[
+            schema::Schema::arbitrary_size_hint(depth)?,
+            HierarchyGenerator::size_hint(depth),
+        ]))
+    }
+}
+
+/// Renders a policy set for messages, one policy per line.
+fn render(policies: &cedar_policy_core::ast::PolicySet) -> String {
+    policies
+        .policies()
+        .map(|p| p.to_string())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
+/// Runs the Rust allow/deny combination (`combine_allow_deny`) and its cube
+/// split (`allow_cubes`) on `policies` and compares both, policy by policy
+/// in id order, with the Lean model's `combineAllowDeny` and `allowCubes`.
+/// Panics on a mismatch; a Rust-side resource limit in the split is a
+/// benign skip (the Lean model has no budgets).
+pub fn test_combine_vs_lean(
+    ffi: &CedarLeanFfi,
+    schema: &cedar_policy::Schema,
+    policies: &cedar_policy_core::ast::PolicySet,
+) -> Verdict {
+    let combined = match combine_allow_deny(policies) {
+        Ok(combined) => combined,
+        Err(e) => panic!("the Rust combination failed on\n{}\n{e}", render(policies)),
+    };
+    let cubes = match allow_cubes(policies, schema, DEFAULT_MAX_SPLIT_NODES, DEFAULT_MAX_CUBES) {
+        Ok(cubes) => cubes,
+        Err(DnfError::NotWellTyped { .. }) => {
+            return Skip::Benign("the combined policies are not well typed".into()).into();
+        }
+        Err(e @ (DnfError::RequestEnvNotFound(_) | DnfError::Typecheck(_))) => {
+            return Skip::Benign(format!("the Rust typecheck could not run: {e}")).into();
+        }
+        Err(e @ (DnfError::TooLarge { .. } | DnfError::RecursionLimit)) => {
+            return Skip::Benign(format!("the Rust cube split hit a resource limit: {e}")).into();
+        }
+        Err(e @ DnfError::Unsupported(_)) => {
+            // With `tolerant-ast` off, `Unsupported` can only mean a Rust
+            // invariant breach — the very bug class this DRT exists to catch.
+            panic!(
+                "the Rust cube split violated an invariant on\n{}\n{e}",
+                render(policies)
+            );
+        }
+    };
+    debug!(
+        "Rust combination:\n{}\nRust cubes:\n{}\n",
+        render(&combined),
+        render(&cubes)
+    );
+    match ffi.run_combine_check(policies, &combined, &cubes) {
+        Ok(result) => {
+            assert!(
+                result.agrees,
+                "the Rust combination and the Lean model disagree on\n{}\n  Rust: {}\n  Lean: {}",
+                render(policies),
+                result.expected,
+                result.actual
+            );
+            Verdict::Checked
+        }
+        Err(e) => panic!("the Lean FFI call failed on\n{}\n{e}", render(policies)),
+    }
+}
+
+#[cfg(test)]
+mod combine_test {
+    use std::collections::HashMap;
+
+    use rand::{Rng, SeedableRng};
+
+    use super::*;
+    use crate::symeval::Verdict;
+    use libfuzzer_sys::arbitrary::{Arbitrary, Unstructured};
+
+    /// A schema for the fixed cases: the entity types and actions they name,
+    /// and a `view`/`edit` context with the booleans `a`–`d`, the records
+    /// `x`, `y` (`{y: Long}`) and `r` (`{a: {y: Long}, b: {y: Long}}`).
+    fn fixture() -> cedar_policy::Schema {
+        cedar_policy::Schema::from_cedarschema_str(
+            r#"
+            entity Group;
+            entity User in [Group];
+            entity Folder;
+            entity Doc in [Folder];
+            action view, edit appliesTo {
+                principal: User,
+                resource: Doc,
+                context: { a: Bool, b: Bool, c: Bool, d: Bool,
+                           x: { y: Long }, y: { y: Long },
+                           r: { a: { y: Long }, b: { y: Long } } }
+            };
+            "#,
+        )
+        .unwrap()
+        .0
+    }
+
+    fn pset(text: &str) -> cedar_policy_core::ast::PolicySet {
+        cedar_policy_core::parser::parse_policyset(text).unwrap()
+    }
+
+    /// Hand-picked sets: the README rule (`permit a; forbid b`), a forbid
+    /// chain (the nested witness), two forbids (id order), forbids with
+    /// every scope kind (the scopes are conjuncts of the chain on both
+    /// sides), an erroring conjunct, a `has` guard, a record (the
+    /// canonicalization path), and the edge sets: no forbids, no permits,
+    /// forbid-only, empty.
+    #[test]
+    fn combine_lean_fixed_cases() {
+        let ffi = CedarLeanFfi::new();
+        let cases = [
+            "permit(principal, action, resource) when { context.a };
+             forbid(principal, action, resource) when { context.b };",
+            "permit(principal, action, resource) when { context.a };
+             forbid(principal, action, resource) when { context.b && context.c && context.d };",
+            "permit(principal, action, resource) when { context.a };
+             forbid(principal, action, resource) when { context.c };
+             forbid(principal, action, resource) when { context.b };",
+            "permit(principal, action, resource) when { context.a };
+             forbid(principal == User::\"alice\", action == Action::\"view\", resource in Folder::\"f\") when { context.b };",
+            "permit(principal, action, resource) when { context.a };
+             forbid(principal is User in Group::\"g\", action in [Action::\"view\", Action::\"edit\"], resource is Doc) when { context.b };",
+            "permit(principal is User, action, resource == Doc::\"d\");
+             forbid(principal, action, resource) when { context.b };",
+            "permit(principal, action, resource) when { context.a };
+             forbid(principal, action, resource) when { context.x.y == 1 && context.b };",
+            "permit(principal, action, resource) when { context.a };
+             forbid(principal, action, resource) when { context has b && context.b };",
+            "permit(principal, action, resource) when { context.a };
+             forbid(principal, action, resource) when { {a: context.x, b: context.y} == context.r };",
+            "permit(principal, action, resource) when { context.a || context.b };
+             forbid(principal, action, resource) when { context.c || context.d };",
+            "permit(principal, action, resource) when { context.a };
+             permit(principal, action, resource) when { context.b };",
+            "permit(principal, action, resource);",
+            "forbid(principal, action, resource) when { context.b };",
+            "",
+            // the two live-fuzz findings: an explicit `when { true }` is a
+            // conjunct (a missing clause is not), and a trivially-true
+            // forbid's witness is the literal `false`, which `Expr::and`
+            // would fold into a literal permit condition
+            "permit(principal, action, resource) when { true };
+             forbid(principal, action, resource) when { true };",
+            "forbid(principal, action, resource) when { true };
+             permit(principal, action, resource) when { false };",
+        ];
+        for text in cases {
+            let policies = pset(text);
+            match test_combine_vs_lean(&ffi, &fixture(), &policies) {
+                Verdict::Checked => {}
+                Verdict::Skipped(skip) => panic!("`{text}` was skipped: {skip:?}"),
+            }
+        }
+        // forbid ids out of insertion order (the sort on both sides), and a
+        // template-linked forbid (its filled scope is in the chain)
+        let mut ordered = cedar_policy_core::ast::PolicySet::new();
+        for (id, text) in [
+            (
+                "p",
+                "permit(principal, action, resource) when { context.a };",
+            ),
+            (
+                "z",
+                "forbid(principal, action, resource) when { context.c };",
+            ),
+            (
+                "a",
+                "forbid(principal, action, resource) when { context.b };",
+            ),
+        ] {
+            let policy =
+                cedar_policy_core::parser::parse_policy(Some(PolicyID::from_string(id)), text)
+                    .unwrap();
+            ordered.add_static(policy).unwrap();
+        }
+        let mut linked = pset(
+            "permit(principal, action, resource) when { context.a };
+             forbid(principal == ?principal, action, resource == ?resource) when { context.b };",
+        );
+        linked
+            .link(
+                PolicyID::from_string("policy1"),
+                PolicyID::from_string("linked"),
+                std::collections::HashMap::from([
+                    (
+                        cedar_policy_core::ast::SlotId::principal(),
+                        r#"User::"u""#.parse().unwrap(),
+                    ),
+                    (
+                        cedar_policy_core::ast::SlotId::resource(),
+                        r#"Doc::"d""#.parse().unwrap(),
+                    ),
+                ]),
+            )
+            .unwrap();
+        for policies in [ordered, linked] {
+            match test_combine_vs_lean(&ffi, &fixture(), &policies) {
+                Verdict::Checked => {}
+                Verdict::Skipped(skip) => panic!("a fixed set was skipped: {skip:?}"),
+            }
+        }
+    }
+
+    /// Exercises the target's plumbing on generated inputs from a fixed seed.
+    #[test]
+    fn combine_lean_target_smoke() {
+        let ffi = CedarLeanFfi::new();
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0xc0_3b1_9e);
+        let (wanted, max_attempts) = (30, 2_000);
+        let mut checked = 0;
+        let mut skipped: HashMap<&'static str, usize> = HashMap::new();
+        for _ in 0..max_attempts {
+            let mut bytes = vec![0u8; 1 << 14];
+            rng.fill_bytes(&mut bytes);
+            let Ok(input) = CombineFuzzTargetInput::arbitrary(&mut Unstructured::new(&bytes))
+            else {
+                *skipped.entry("not generated").or_default() += 1;
+                continue;
+            };
+            let Ok(schema) = cedar_policy::Schema::try_from(input.schema.clone()) else {
+                *skipped.entry("schema").or_default() += 1;
+                continue;
+            };
+            match test_combine_vs_lean(&ffi, &schema, &input.policies) {
                 Verdict::Checked => checked += 1,
                 Verdict::Skipped(_) => *skipped.entry("skipped").or_default() += 1,
             }

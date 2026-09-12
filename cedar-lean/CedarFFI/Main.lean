@@ -27,6 +27,7 @@ import Cedar.DNF
 import Cedar.DNF.Split
 import Cedar.DNF.Elim
 import Cedar.DNF.SplitPolicy
+import Cedar.DNF.Combine
 import Cedar.DNF.Like
 import Cedar.TPE
 import Cedar.TPE.Authorizer
@@ -1126,6 +1127,60 @@ private def checkLike (req : Cedar.DNF.Proto.LikeCheckRequest) : CheckResult :=
     let req ← ((@Proto.Message.interpret? Cedar.DNF.Proto.LikeCheckRequest) req
       |>.mapError (s!"failed to parse input: {·}") : Except String _)
     runAndTime (λ () => checkLike req)
+
+/-- A policy as both sides represent it: id, effect, scopes and the condition
+list as one canonicalized expression (Rust carries one `when` expression;
+the model's `combinePermit` appends conditions, whose `Conditions.toExpr` is
+the right-nested `&&` Rust builds). -/
+private structure NormPolicy where
+  id : PolicyID
+  effect : Effect
+  principalScope : PrincipalScope
+  actionScope : ActionScope
+  resourceScope : ResourceScope
+  condition : Spec.Expr
+deriving DecidableEq, Repr
+
+private def normPolicy (p : Policy) : NormPolicy :=
+  { id := p.id, effect := p.effect, principalScope := p.principalScope,
+    actionScope := p.actionScope, resourceScope := p.resourceScope,
+    condition := canonExpr (Conditions.toExpr p.condition) }
+
+/-- The policies in id order, normalized. -/
+private def normPolicies (ps : Policies) : List NormPolicy :=
+  (ps.mergeSort (fun a b => decide (a.id ≤ b.id))).map normPolicy
+
+/-- Canonicalizes record-field order in a policy set's conditions (the
+model's input, as for `runCheckSplit`). -/
+private def canonPolicies (ps : Policies) : Policies :=
+  ps.map (fun p => { p with condition := p.condition.map (fun c => { c with body := canonExpr c.body }) })
+
+/-- Checks a Rust allow/deny combination against the model: the combined set
+and the cube set must both match, policy by policy, in id order. -/
+private def checkCombine (req : Cedar.DNF.Proto.CombineCheckRequest) : CheckResult :=
+  let ps := canonPolicies req.policies
+  let combined := normPolicies (Cedar.DNF.combineAllowDeny ps)
+  let cubes := normPolicies (Cedar.DNF.allowCubes ps)
+  let expectedCombined := normPolicies req.expectedCombined
+  let expectedCubes := normPolicies req.expectedCubes
+  if combined = expectedCombined ∧ cubes = expectedCubes then
+    { agrees := true }
+  else
+    { agrees := false,
+      expected := reprStr (expectedCombined, expectedCubes),
+      actual := reprStr (combined, cubes) }
+
+/--
+  `req`: binary protobuf for a `CombineCheckRequest`
+
+  Checks a Rust allow/deny combination (`combine_allow_deny`, `allow_cubes`)
+  against the Lean model (`Cedar.DNF.combineAllowDeny`, `Cedar.DNF.allowCubes`).
+-/
+@[export runCheckCombine] unsafe def runCheckCombine (req : ByteArray) : String :=
+  runFfiM do
+    let req ← ((@Proto.Message.interpret? Cedar.DNF.Proto.CombineCheckRequest) req
+      |>.mapError (s!"failed to parse input: {·}") : Except String _)
+    runAndTime (λ () => checkCombine req)
 
 --------------------------------- FFI Test Utils ---------------------------------
 /- Some definitions used to test lean object decoding in Rust -/

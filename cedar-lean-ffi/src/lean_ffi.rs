@@ -290,6 +290,7 @@ unsafe extern "C" {
     fn runCheckSplit(req: *mut lean_object) -> *mut lean_object;
     fn runCheckElim(req: *mut lean_object) -> *mut lean_object;
     fn runCheckSplitPolicy(req: *mut lean_object) -> *mut lean_object;
+    fn runCheckCombine(req: *mut lean_object) -> *mut lean_object;
     fn runCheckLike(req: *mut lean_object) -> *mut lean_object;
 
     fn initialize_Cedar_CedarFFI(builtin: u8, ob: *mut lean_object) -> *mut lean_object;
