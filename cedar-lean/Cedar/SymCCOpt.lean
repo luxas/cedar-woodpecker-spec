@@ -21,6 +21,7 @@ public import Cedar.SymCC
 public import Cedar.SymCCOpt.CompiledPolicies
 public import Cedar.SymCCOpt.Extractor
 public import Cedar.SymCCOpt.SatUnsat
+public import Cedar.SymCCOpt.SymEval
 public import Cedar.SymCCOpt.Verifier
 public import Cedar.Validation.Validator
 

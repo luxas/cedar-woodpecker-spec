@@ -23,6 +23,7 @@ import SymTest.IPAddr
 import SymTest.Like
 import SymTest.Tags
 import SymTest.Solver
+import SymTest.SymEval
 import SymTest.WellTyped
 import SymTest.Decoder
 import SymTest.Verifier
@@ -45,6 +46,7 @@ private def tests :=
   Datetime.tests ++
   Tags.tests ++
   (Solver.tests.map TestSuite.liftToSolverM) ++
+  SymEval.tests ++
   WellTyped.tests ++
   (Decoder.tests.map TestSuite.liftToSolverM) ++
   Verifier.tests
