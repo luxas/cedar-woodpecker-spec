@@ -17,6 +17,7 @@
 import Cedar.Data
 import Cedar.DNF
 import Cedar.DNF.Split
+import Cedar.DNF.Like
 import Cedar.Spec
 import Cedar.Thm
 import Cedar.Validation
