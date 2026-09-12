@@ -1,0 +1,43 @@
+/-
+ Copyright Cedar Contributors
+
+ Licensed under the Apache License, Version 2.0 (the "License");
+ you may not use this file except in compliance with the License.
+ You may obtain a copy of the License at
+
+      https://www.apache.org/licenses/LICENSE-2.0
+
+ Unless required by applicable law or agreed to in writing, software
+ distributed under the License is distributed on an "AS IS" BASIS,
+ WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+ See the License for the specific language governing permissions and
+ limitations under the License.
+-/
+
+import Cedar.Thm.DNF.Interp
+import Cedar.Thm.DNF.Extend
+import Cedar.Thm.DNF.Invariant
+import Cedar.Thm.DNF.Master
+import Cedar.Thm.DNF.Pruning
+import Cedar.Thm.DNF.Equivalence
+
+/-!
+Machine-checked equivalence of the DNF converter modeled in `Cedar.DNF`
+(Phase 3.5 for Step 1; Rust: `cedar-policy-symcc/src/dnf`, branch `dnf`).
+
+Main results:
+
+* `Cedar.DNF.interp_dnf` / `interp_dnfOfExpr` — the DNF interprets exactly
+  like the input under every three-valued valuation on which the `canError`
+  answers are correct;
+* `Cedar.DNF.evaluate_dnf` / `evaluate_dnfOfExpr` — under
+  `Cedar.Spec.evaluate`, the DNF and the input produce the same boolean value
+  or both err, for every request and entity store on which every atom
+  evaluates to a boolean or an error and the `canError` answers are correct
+  (`evaluate_dnfOfExpr` needs only the former); soundness and completeness:
+  the two sides agree exactly, up to the kind of error;
+* `Cedar.DNF.dnf_cubes_exclusive` — at most one cube of the DNF is true,
+  under any valuation. Together with the master invariant's no-err clauses
+  (which make a true cube never coexist with an erring one), this is why the
+  cubes' order does not matter.
+-/
