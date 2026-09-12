@@ -19,6 +19,7 @@
     reason = "declares a broad array of FFI functions, some of which are not currently used in any fuzz targets but are declared for completeness"
 )]
 
+mod dnf;
 mod symeval;
 mod tpe;
 
@@ -285,6 +286,7 @@ unsafe extern "C" {
     fn reauthorizeResidual(req: *mut lean_object) -> *mut lean_object;
 
     fn runSymEvalReplay(schema: *mut lean_object, req: *mut lean_object) -> *mut lean_object;
+    fn runCheckDnf(req: *mut lean_object) -> *mut lean_object;
 
     fn initialize_Cedar_CedarFFI(builtin: u8, ob: *mut lean_object) -> *mut lean_object;
 

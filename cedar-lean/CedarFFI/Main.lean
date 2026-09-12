@@ -23,6 +23,7 @@ import Cedar.SymCC.Verifier
 import Cedar.SymCCOpt
 import Cedar.SymCCOpt.Verifier
 import CedarProto
+import Cedar.DNF
 import Cedar.TPE
 import Cedar.TPE.Authorizer
 import Protobuf
@@ -984,6 +985,39 @@ def parseSymEvalReplayRequest (schema : Schema) (proto : ByteArray) :
   runFfiM do
     let (req, εnv) ← (parseSymEvalReplayRequest schema req : Except String _)
     runAndTime (λ () => replaySymEval req εnv)
+
+--------------------------------- DNF model check ---------------------------------
+
+/--
+Checks a Rust DNF conversion against the Lean model: computes `Cedar.DNF.dnf`
+on the input with the recorded `canError` extreme and compares the result
+structurally with the Rust output. The *input* is canonicalized before the
+conversion, not just the outputs before the comparison: record fields cross
+the wire in arbitrary `HashMap` order, so two equal Rust atoms could
+otherwise decode to unequal expressions and defeat the model's literal dedup.
+Rust's own record representation is ordered (`BTreeMap`), so two Rust atoms
+are equal iff their canonicalized decodes are.
+-/
+private def checkDnf (req : Cedar.DNF.Proto.DnfCheckRequest) : CheckResult :=
+  let result := Cedar.DNF.dnf (canonExpr req.expr) (fun _ => req.canErrorAll)
+  let expected := canonExpr req.expected
+  if result = expected then
+    { agrees := true }
+  else
+    { agrees := false, expected := reprStr expected, actual := reprStr result }
+
+/--
+  `req`: binary protobuf for a `DnfCheckRequest`
+
+  Checks a Rust DNF conversion (`Dnf::of` with an all-`true` or all-`false`
+  `can_error`, rendered with `to_expr`) against the Lean model
+  (`Cedar.DNF.dnf`).
+-/
+@[export runCheckDnf] unsafe def runCheckDnf (req : ByteArray) : String :=
+  runFfiM do
+    let req ← ((@Proto.Message.interpret? Cedar.DNF.Proto.DnfCheckRequest) req
+      |>.mapError (s!"failed to parse input: {·}") : Except String _)
+    runAndTime (λ () => checkDnf req)
 
 --------------------------------- FFI Test Utils ---------------------------------
 /- Some definitions used to test lean object decoding in Rust -/
