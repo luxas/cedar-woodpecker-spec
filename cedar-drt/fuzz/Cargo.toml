@@ -570,6 +570,30 @@ test = false
 doc = false
 
 [[bin]]
+name = "symcc-evaluator-concrete-drt"
+path = "fuzz_targets/symcc-evaluator-concrete-drt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "symcc-evaluator-open-drt"
+path = "fuzz_targets/symcc-evaluator-open-drt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "symcc-evaluator-tpe-drt"
+path = "fuzz_targets/symcc-evaluator-tpe-drt.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "symcc-evaluator-lean-drt"
+path = "fuzz_targets/symcc-evaluator-lean-drt.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "input-generation"
 path = "fuzz_targets/input-generation.rs"
 test = false

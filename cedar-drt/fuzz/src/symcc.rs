@@ -498,7 +498,7 @@ impl SymCCWithUsageLimit {
     }
 }
 
-fn new_symcc() -> CedarSymCompiler<WrappedLocalSolver> {
+pub(crate) fn new_symcc() -> CedarSymCompiler<WrappedLocalSolver> {
     let solver = local_solver().expect("CVC5 should exist");
     CedarSymCompiler::new(WrappedLocalSolver::new(solver))
         .expect("CedarSymCompiler construction should succeed")
