@@ -564,6 +564,12 @@ test = false
 doc = false
 
 [[bin]]
+name = "split-atoms-lean-drt"
+path = "fuzz_targets/split-atoms-lean-drt.rs"
+test = false
+doc = false
+
+[[bin]]
 name = "symcc-cex-drt"
 path = "fuzz_targets/symcc-cex-drt.rs"
 test = false

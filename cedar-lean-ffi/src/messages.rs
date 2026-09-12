@@ -908,6 +908,18 @@ impl proto::DnfCheckRequest {
     }
 }
 
+impl proto::SplitCheckRequest {
+    pub(crate) fn new(
+        expr: &cedar_policy_core::ast::Expr,
+        expected: &cedar_policy_core::ast::Expr,
+    ) -> Self {
+        Self {
+            expr: Some(cedar_policy::proto::models::Expr::from(expr)),
+            expected: Some(cedar_policy::proto::models::Expr::from(expected)),
+        }
+    }
+}
+
 impl proto::BatchedAuthorizationRequest {
     pub(crate) fn new(
         policies: &PolicySet,

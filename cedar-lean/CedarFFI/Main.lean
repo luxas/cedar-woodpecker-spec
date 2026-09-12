@@ -24,6 +24,7 @@ import Cedar.SymCCOpt
 import Cedar.SymCCOpt.Verifier
 import CedarProto
 import Cedar.DNF
+import Cedar.DNF.Split
 import Cedar.TPE
 import Cedar.TPE.Authorizer
 import Protobuf
@@ -1018,6 +1019,36 @@ private def checkDnf (req : Cedar.DNF.Proto.DnfCheckRequest) : CheckResult :=
     let req ← ((@Proto.Message.interpret? Cedar.DNF.Proto.DnfCheckRequest) req
       |>.mapError (s!"failed to parse input: {·}") : Except String _)
     runAndTime (λ () => checkDnf req)
+
+/--
+Checks a Rust atom split against the Lean model: computes
+`Cedar.DNF.splitAtoms` on the input and compares the result structurally
+with the Rust output. As for `runCheckDnf`, the *input* is canonicalized
+with `canonExpr` before running the model (record fields cross the wire in
+arbitrary `HashMap` order, and the hoisting order visits record children in
+Rust's sorted `BTreeMap` order, which canonicalization restores); the
+model's output is canonical by construction, and `expected` is canonicalized
+before comparing.
+-/
+private def checkSplit (req : Cedar.DNF.Proto.SplitCheckRequest) : CheckResult :=
+  let result := Cedar.DNF.splitAtoms (canonExpr req.expr)
+  let expected := canonExpr req.expected
+  if result = expected then
+    { agrees := true }
+  else
+    { agrees := false, expected := reprStr expected, actual := reprStr result }
+
+/--
+  `req`: binary protobuf for a `SplitCheckRequest`
+
+  Checks a Rust atom split (`split_atoms`) against the Lean model
+  (`Cedar.DNF.splitAtoms`).
+-/
+@[export runCheckSplit] unsafe def runCheckSplit (req : ByteArray) : String :=
+  runFfiM do
+    let req ← ((@Proto.Message.interpret? Cedar.DNF.Proto.SplitCheckRequest) req
+      |>.mapError (s!"failed to parse input: {·}") : Except String _)
+    runAndTime (λ () => checkSplit req)
 
 --------------------------------- FFI Test Utils ---------------------------------
 /- Some definitions used to test lean object decoding in Rust -/

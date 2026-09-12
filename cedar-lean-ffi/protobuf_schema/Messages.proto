@@ -338,6 +338,14 @@ message DnfCheckRequest {
     bool can_error_all = 3;
 }
 
+// A Rust atom split to check against the Lean model (`Cedar.DNF.splitAtoms`).
+message SplitCheckRequest {
+    // The input expression.
+    cedar_policy_core.Expr expr = 1;
+    // The Rust result: `split_atoms(expr, DEFAULT_MAX_SPLIT_NODES)`.
+    cedar_policy_core.Expr expected = 2;
+}
+
 // Partial Authorization Messages
 message PartialEntityUID {
     cedar_policy_core.Name ty = 1;
