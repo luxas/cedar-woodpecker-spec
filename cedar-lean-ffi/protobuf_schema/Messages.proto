@@ -297,6 +297,36 @@ message CheckAssertsRequest {
     RequestEnv request = 3;
 }
 
+// Symbolic evaluator replay messages
+
+// One query the Rust symbolic evaluator issued: the full assert list passed
+// to the solver and its answer.
+message SymEvalQuery {
+    Asserts asserts = 1;
+    bool unsat = 2;
+}
+
+// A recorded Rust symbolic evaluation to replay through the Lean model
+// (`Cedar.SymCC.Opt.symEvalWithBase`), plus the Rust result to compare with.
+message SymEvalReplayRequest {
+    RequestEnv request = 1;
+    // The typechecked-then-erased target expression the Rust evaluator walked.
+    cedar_policy_core.Expr expr = 2;
+    // The base asserts of the evaluate call, verbatim.
+    Asserts base = 3;
+    // Every query, in order (evaluate's first, then check_equivalent's).
+    repeated SymEvalQuery queries = 4;
+    // The Rust result: the folded expression and its root outcome set.
+    cedar_policy_core.Expr expected = 5;
+    bool expected_can_true = 6;
+    bool expected_can_false = 7;
+    bool expected_can_error = 8;
+    // When set, a check_equivalent call was recorded with this base; the Lean
+    // model re-runs it and expects its (final) query to answer `true`.
+    bool check_equivalent = 9;
+    Asserts ce_base = 10;
+}
+
 // Partial Authorization Messages
 message PartialEntityUID {
     cedar_policy_core.Name ty = 1;

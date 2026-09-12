@@ -856,6 +856,44 @@ impl proto::CheckAssertsRequest {
     }
 }
 
+impl proto::SymEvalQuery {
+    pub(crate) fn new(asserts: &[datatypes::Term], unsat: bool) -> Self {
+        Self {
+            asserts: Some(proto::Asserts::new(asserts)),
+            unsat,
+        }
+    }
+}
+
+impl proto::SymEvalReplayRequest {
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        request: &RequestEnv,
+        expr: &cedar_policy_core::ast::Expr,
+        base: &[datatypes::Term],
+        queries: &[(Vec<datatypes::Term>, bool)],
+        expected: &cedar_policy_core::ast::Expr,
+        expected_outcomes: (bool, bool, bool),
+        ce_base: Option<&[datatypes::Term]>,
+    ) -> Self {
+        Self {
+            request: Some(proto::RequestEnv::from(request)),
+            expr: Some(cedar_policy::proto::models::Expr::from(expr)),
+            base: Some(proto::Asserts::new(base)),
+            queries: queries
+                .iter()
+                .map(|(asserts, unsat)| proto::SymEvalQuery::new(asserts, *unsat))
+                .collect(),
+            expected: Some(cedar_policy::proto::models::Expr::from(expected)),
+            expected_can_true: expected_outcomes.0,
+            expected_can_false: expected_outcomes.1,
+            expected_can_error: expected_outcomes.2,
+            check_equivalent: ce_base.is_some(),
+            ce_base: ce_base.map(proto::Asserts::new),
+        }
+    }
+}
+
 impl proto::BatchedAuthorizationRequest {
     pub(crate) fn new(
         policies: &PolicySet,
