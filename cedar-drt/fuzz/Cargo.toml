@@ -727,3 +727,9 @@ name = "sql-is-authorized-drt"
 path = "fuzz_targets/sql-is-authorized-drt.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "sql-query-drt"
+path = "fuzz_targets/sql-query-drt.rs"
+test = false
+doc = false

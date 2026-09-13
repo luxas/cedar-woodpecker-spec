@@ -30,7 +30,8 @@ use std::collections::{BTreeMap, BTreeSet};
 use cedar_drt::sql_impl::SqlTestImpl;
 use cedar_drt::tests::drop_some_entities;
 use cedar_policy::{
-    Authorizer, Entities, PolicyId, PolicySet, Request, Schema, ValidationMode, Validator,
+    Authorizer, Decision, Entities, EntityUid, PolicyId, PolicySet, PrincipalQueryRequest, Request,
+    ResourceQueryRequest, Schema, ValidationMode, Validator,
 };
 use cedar_policy_generators::abac::{ABACPolicy, ABACRequest};
 use cedar_policy_generators::hierarchy::HierarchyGenerator;
@@ -64,6 +65,8 @@ pub struct SqlFuzzTargetInput {
     pub policy: ABACPolicy,
     /// the requests to try
     pub requests: [ABACRequest; 8],
+    /// whether `in` uses the closed hierarchy table or the recursive CTE
+    pub hierarchy_closed: bool,
 }
 
 impl<'a> Arbitrary<'a> for SqlFuzzTargetInput {
@@ -85,11 +88,13 @@ impl<'a> Arbitrary<'a> for SqlFuzzTargetInput {
         let cedar_schema = Schema::try_from(schema.clone()).map_err(|_| Error::IncorrectFormat)?;
         let entities = drop_some_entities(all_entities, u)?;
         let entities = schemas::add_actions_to_entities(&cedar_schema, entities)?;
+        let hierarchy_closed = u.arbitrary()?;
         Ok(Self {
             schema,
             entities,
             policy,
             requests,
+            hierarchy_closed,
         })
     }
 
@@ -123,7 +128,96 @@ pub fn check_is_authorized(input: &SqlFuzzTargetInput) -> Verdict {
         .add(input.policy.clone().link_to_static())
         .expect("a fresh policy set accepts one policy");
     let requests: Vec<Request> = input.requests.iter().cloned().map(Into::into).collect();
-    compare(&schema, &policies, &input.entities, &requests)
+    compare(
+        &schema,
+        &policies,
+        &input.entities,
+        &requests,
+        input.hierarchy_closed,
+    )
+}
+
+/// `cedar-policy`'s answer for one concrete request: decision, determining
+/// policies, erroring policies.
+fn expected(
+    authorizer: &Authorizer,
+    request: &Request,
+    policies: &PolicySet,
+    entities: &Entities,
+) -> (Decision, BTreeSet<PolicyId>, BTreeSet<PolicyId>) {
+    let response = authorizer.is_authorized(request, policies, entities);
+    (
+        response.decision(),
+        response.diagnostics().reason().cloned().collect(),
+        response
+            .diagnostics()
+            .errors()
+            .map(|e| match e {
+                cedar_policy::AuthorizationError::PolicyEvaluationError(e) => e.policy_id().clone(),
+            })
+            .collect(),
+    )
+}
+
+/// What to do with a `cedar-sql` error on one request: skip the request
+/// (`Ok(Some(skip))`), skip the input (`Err`), or panic on a real failure.
+fn classify(
+    error: SqlError,
+    request: &Request,
+    policies: &PolicySet,
+    entities: &Entities,
+) -> Result<Skip, Skip> {
+    match error {
+        SqlError::Unsupported(what) => Ok(Skip::Benign(what.to_owned())),
+        // Postgres `text` cannot hold NUL: a documented limitation, skipped.
+        SqlError::Load(message) if message.contains("NUL") => Ok(Skip::Benign(message)),
+        e if e.is_timeout() => Err(Skip::Timeout),
+        e => panic!(
+            "cedar-sql failed for {request}\nPolicies:\n{policies}\nEntities:\n{}\nError: {e}",
+            entities.as_ref()
+        ),
+    }
+}
+
+/// The verdict of a batch of per-request outcomes: checked if any request
+/// was, else the first skip.
+fn verdict(checked: usize, skips: Vec<Skip>) -> Verdict {
+    if checked > 0 {
+        return Verdict::Checked;
+    }
+    let benign = skips.iter().position(|s| matches!(s, Skip::Benign(_)));
+    let mut skips = skips;
+    match benign {
+        Some(i) => skips.swap_remove(i).into(),
+        None => skips
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| Skip::OutsideEnvelope("no request".to_owned()))
+            .into(),
+    }
+}
+
+/// The schema and the test implementation for an input, or why it is skipped.
+fn setup(
+    schema: &Schema,
+    policies: &PolicySet,
+    hierarchy_closed: bool,
+) -> Result<SqlTestImpl, Skip> {
+    let validator = Validator::new(schema.clone());
+    if !validator
+        .validate(policies, ValidationMode::Strict)
+        .validation_passed()
+    {
+        return Err(Skip::NotWellTyped(
+            "the policies do not validate strictly".into(),
+        ));
+    }
+    match SqlTestImpl::new(schema.clone(), hierarchy_closed) {
+        Ok(sql) => Ok(sql),
+        Err(SqlError::Unsupported(what)) => Err(Skip::Benign(what.into())),
+        Err(SqlError::Schema(message)) => Err(Skip::Benign(message)),
+        Err(e) => panic!("cannot set up the database: {e}"),
+    }
 }
 
 /// Authorizes every valid request of `requests` through `cedar-sql` and
@@ -134,74 +228,274 @@ pub fn compare(
     policies: &PolicySet,
     entities: &Entities,
     requests: &[Request],
+    hierarchy_closed: bool,
 ) -> Verdict {
-    let validator = Validator::new(schema.clone());
-    if !validator
-        .validate(policies, ValidationMode::Strict)
-        .validation_passed()
-    {
-        return Skip::NotWellTyped("the policies do not validate strictly".into()).into();
-    }
-    let sql = match SqlTestImpl::new(schema.clone()) {
+    let sql = match setup(schema, policies, hierarchy_closed) {
         Ok(sql) => sql,
-        Err(SqlError::Unsupported(what)) => return Skip::Benign(what.into()).into(),
-        Err(SqlError::Schema(message)) => return Skip::Benign(message).into(),
-        Err(e) => panic!("cannot set up the database: {e}"),
+        Err(skip) => return skip.into(),
     };
+    let validator = Validator::new(schema.clone());
     let authorizer = Authorizer::new();
     let mut checked = 0;
-    let mut benign = None;
-    let mut outside = None;
+    let mut skips = Vec::new();
     for request in requests {
         if !crate::tpe::passes_request_validation(&validator, request) {
-            outside.get_or_insert_with(|| "no request validates".to_owned());
+            skips.push(Skip::OutsideEnvelope(
+                "the request does not validate".into(),
+            ));
             continue;
         }
         let actual = match sql.authorize(request, policies, entities) {
             Ok(response) => response,
-            Err(SqlError::Unsupported(what)) => {
-                benign = Some(what.to_owned());
-                continue;
-            }
-            // Postgres `text` cannot hold NUL: a documented limitation, skipped.
-            Err(SqlError::Load(message)) if message.contains("NUL") => {
-                benign = Some(message);
-                continue;
-            }
-            Err(e) if e.is_timeout() => return Skip::Timeout.into(),
-            Err(SqlError::Request(message) | SqlError::Tpe(message)) => {
-                outside = Some(message);
-                continue;
-            }
-            Err(e) => panic!(
-                "cedar-sql failed for {request}\nPolicies:\n{policies}\nEntities:\n{}\nError: {e}",
-                entities.as_ref()
-            ),
+            Err(e) => match classify(e, request, policies, entities) {
+                Ok(skip) => {
+                    skips.push(skip);
+                    continue;
+                }
+                Err(skip) => return skip.into(),
+            },
         };
-        let expected = authorizer.is_authorized(request, policies, entities);
-        let reason: BTreeSet<PolicyId> = expected.diagnostics().reason().cloned().collect();
-        let errors: BTreeSet<PolicyId> = expected
-            .diagnostics()
-            .errors()
-            .map(|e| match e {
-                cedar_policy::AuthorizationError::PolicyEvaluationError(e) => e.policy_id().clone(),
-            })
-            .collect();
+        let (decision, reason, errors) = expected(&authorizer, request, policies, entities);
         assert_eq!(
             (actual.decision, &actual.reason, &actual.errors),
-            (expected.decision(), &reason, &errors),
+            (decision, &reason, &errors),
             "cedar-sql disagrees with cedar-policy for {request}\nPolicies:\n{policies}\nEntities:\n{}",
             entities.as_ref()
         );
         checked += 1;
     }
-    if checked > 0 {
-        Verdict::Checked
-    } else if let Some(what) = benign {
-        Skip::Benign(what).into()
-    } else {
-        Skip::OutsideEnvelope(outside.unwrap_or_else(|| "no request".to_owned())).into()
+    verdict(checked, skips)
+}
+
+/// Which request variables a partial request leaves unknown.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Unknowns {
+    /// The principal.
+    Principal,
+    /// The resource.
+    Resource,
+    /// Both.
+    Both,
+}
+
+impl Unknowns {
+    fn flags(self) -> (bool, bool) {
+        match self {
+            Unknowns::Principal => (true, false),
+            Unknowns::Resource => (false, true),
+            Unknowns::Both => (true, true),
+        }
     }
+}
+
+/// The input of `sql-query-drt`: the ABAC input, with which variables each
+/// request leaves unknown.
+#[derive(Debug, Clone)]
+pub struct SqlQueryFuzzTargetInput {
+    /// The schema, entities, policy and requests.
+    pub base: SqlFuzzTargetInput,
+    /// Per request, the unknown variables.
+    pub unknowns: [Unknowns; 8],
+}
+
+impl<'a> Arbitrary<'a> for SqlQueryFuzzTargetInput {
+    fn arbitrary(u: &mut Unstructured<'a>) -> arbitrary::Result<Self> {
+        let base = SqlFuzzTargetInput::arbitrary(u)?;
+        let mut unknowns = [Unknowns::Resource; 8];
+        for unknown in &mut unknowns {
+            *unknown = *u.choose(&[Unknowns::Principal, Unknowns::Resource, Unknowns::Both])?;
+        }
+        Ok(Self { base, unknowns })
+    }
+
+    fn try_size_hint(
+        depth: usize,
+    ) -> std::result::Result<(usize, Option<usize>), MaxRecursionReached> {
+        Ok(arbitrary::size_hint::and(
+            SqlFuzzTargetInput::try_size_hint(depth)?,
+            (8, Some(8)),
+        ))
+    }
+}
+
+/// The `sql-query-drt` check on one generated input.
+pub fn check_query(input: &SqlQueryFuzzTargetInput) -> Verdict {
+    let Ok(schema) = Schema::try_from(input.base.schema.clone()) else {
+        return Skip::OutsideEnvelope("the schema does not convert".into()).into();
+    };
+    let mut policies = PolicySet::new();
+    policies
+        .add(input.base.policy.clone().link_to_static())
+        .expect("a fresh policy set accepts one policy");
+    let requests: Vec<(Request, Unknowns)> = input
+        .base
+        .requests
+        .iter()
+        .cloned()
+        .map(Into::into)
+        .zip(input.unknowns)
+        .collect();
+    compare_query(
+        &schema,
+        &policies,
+        &input.base.entities,
+        &requests,
+        input.base.hierarchy_closed,
+    )
+}
+
+/// Runs every valid partial request through `cedar-sql` and checks each
+/// returned row against `cedar-policy`'s authorizer on the concrete
+/// candidate, that the rows are exactly the candidates (the entities of the
+/// unknown types), and that the allowed set agrees with
+/// `PolicySet::query_resource`/`query_principal` when one variable is unknown.
+pub fn compare_query(
+    schema: &Schema,
+    policies: &PolicySet,
+    entities: &Entities,
+    requests: &[(Request, Unknowns)],
+    hierarchy_closed: bool,
+) -> Verdict {
+    let sql = match setup(schema, policies, hierarchy_closed) {
+        Ok(sql) => sql,
+        Err(skip) => return skip.into(),
+    };
+    let validator = Validator::new(schema.clone());
+    let authorizer = Authorizer::new();
+    let mut checked = 0;
+    let mut skips = Vec::new();
+    for (request, unknowns) in requests {
+        if !crate::tpe::passes_request_validation(&validator, request) {
+            skips.push(Skip::OutsideEnvelope(
+                "the request does not validate".into(),
+            ));
+            continue;
+        }
+        let (unknown_principal, unknown_resource) = unknowns.flags();
+        let rows = match sql.query(
+            request,
+            unknown_principal,
+            unknown_resource,
+            policies,
+            entities,
+        ) {
+            Ok(rows) => rows,
+            Err(e) => match classify(e, request, policies, entities) {
+                Ok(skip) => {
+                    skips.push(skip);
+                    continue;
+                }
+                Err(skip) => return skip.into(),
+            },
+        };
+        let principal = request.principal().expect("concrete");
+        let resource = request.resource().expect("concrete");
+        let action = request.action().expect("concrete");
+        let context = request.context().expect("concrete");
+        let candidates = |unknown: bool, uid: &EntityUid| -> Vec<EntityUid> {
+            if unknown {
+                entities
+                    .iter()
+                    .map(|e| e.uid())
+                    .filter(|u| u.type_name() == uid.type_name())
+                    .collect()
+            } else {
+                vec![uid.clone()]
+            }
+        };
+        let mut expected_rows = BTreeMap::new();
+        for p in candidates(unknown_principal, principal) {
+            for r in candidates(unknown_resource, resource) {
+                let concrete =
+                    Request::new(p.clone(), action.clone(), r.clone(), context.clone(), None)
+                        .expect("a request without validation");
+                expected_rows.insert(
+                    (p.to_string(), r.to_string()),
+                    expected(&authorizer, &concrete, policies, entities),
+                );
+            }
+        }
+        let actual_rows: BTreeMap<
+            (String, String),
+            (Decision, BTreeSet<PolicyId>, BTreeSet<PolicyId>),
+        > = rows
+            .iter()
+            .map(|row| {
+                let p = row.principal.clone().unwrap_or_else(|| principal.clone());
+                let r = row.resource.clone().unwrap_or_else(|| resource.clone());
+                (
+                    (p.to_string(), r.to_string()),
+                    (
+                        row.response.decision,
+                        row.response.reason.clone(),
+                        row.response.errors.clone(),
+                    ),
+                )
+            })
+            .collect();
+        assert_eq!(
+            actual_rows.len(),
+            rows.len(),
+            "duplicate rows for {request} with {unknowns:?}\nPolicies:\n{policies}"
+        );
+        assert_eq!(
+            actual_rows,
+            expected_rows,
+            "cedar-sql disagrees with cedar-policy for {request} with {unknowns:?}\nPolicies:\n{policies}\nEntities:\n{}",
+            entities.as_ref()
+        );
+        // The allowed set against the permission queries.
+        let allowed: BTreeSet<String> = actual_rows
+            .iter()
+            .filter(|(_, (decision, _, _))| *decision == Decision::Allow)
+            .map(|((p, r), _)| {
+                if unknown_principal {
+                    p.clone()
+                } else {
+                    r.clone()
+                }
+            })
+            .collect();
+        let query_allowed: Option<BTreeSet<String>> = match unknowns {
+            Unknowns::Resource => ResourceQueryRequest::new(
+                principal.clone(),
+                action.clone(),
+                resource.type_name().clone(),
+                context.clone(),
+                validator.schema(),
+            )
+            .ok()
+            .and_then(|q| {
+                policies
+                    .query_resource(&q, entities, validator.schema())
+                    .ok()
+            })
+            .map(|uids| uids.map(|u| u.to_string()).collect()),
+            Unknowns::Principal => PrincipalQueryRequest::new(
+                principal.type_name().clone(),
+                action.clone(),
+                resource.clone(),
+                context.clone(),
+                validator.schema(),
+            )
+            .ok()
+            .and_then(|q| {
+                policies
+                    .query_principal(&q, entities, validator.schema())
+                    .ok()
+            })
+            .map(|uids| uids.map(|u| u.to_string()).collect()),
+            Unknowns::Both => None,
+        };
+        if let Some(query_allowed) = query_allowed {
+            assert_eq!(
+                allowed, query_allowed,
+                "cedar-sql's allowed set disagrees with the permission query for {request} with {unknowns:?}\nPolicies:\n{policies}"
+            );
+        }
+        checked += 1;
+    }
+    verdict(checked, skips)
 }
 
 /// The skip reasons of a batch of verdicts (kind and message), for smoke tests.
@@ -283,10 +577,12 @@ mod tests {
             request("User::\"nobody\"", "Document::\"d1\""),
             request("User::\"luxas\"", "Document::\"nope\""),
         ];
-        assert!(matches!(
-            compare(&schema, &policies, &entities, &requests),
-            Verdict::Checked
-        ));
+        for closed in [true, false] {
+            assert!(matches!(
+                compare(&schema, &policies, &entities, &requests, closed),
+                Verdict::Checked
+            ));
+        }
     }
 
     /// A construct `cedar-sql` does not support (an extension type) is a
@@ -304,10 +600,82 @@ mod tests {
         )
         .unwrap();
         let requests = [request("User::\"luxas\"", "User::\"luxas\"")];
-        match compare(&schema, &policies, &entities, &requests) {
+        match compare(&schema, &policies, &entities, &requests, true) {
             Verdict::Skipped(Skip::Benign(what)) => assert_eq!(what, "extension types"),
             other => panic!("expected a benign skip, got {other:?}"),
         }
+    }
+
+    /// The README's example with the resource unknown, and both unknown.
+    #[test]
+    fn readme_query() {
+        let schema = Schema::from_cedarschema_str(SCHEMA).unwrap().0;
+        let entities = Entities::from_json_str(ENTITIES, Some(&schema)).unwrap();
+        let policies = PolicySet::from_str(
+            r#"permit(principal is User, action == Action::"get", resource is Document in Folder::"foo")
+               when { principal.firstName == "Lucas" && !resource.parent.confidential };
+               forbid(principal, action, resource) when { resource.parent.confidential };"#,
+        )
+        .unwrap();
+        let requests = [
+            (
+                request("User::\"luxas\"", "Document::\"d1\""),
+                Unknowns::Resource,
+            ),
+            (
+                request("User::\"other\"", "Document::\"d1\""),
+                Unknowns::Principal,
+            ),
+            (
+                request("User::\"nobody\"", "Document::\"nope\""),
+                Unknowns::Both,
+            ),
+        ];
+        for closed in [true, false] {
+            assert!(matches!(
+                compare_query(&schema, &policies, &entities, &requests, closed),
+                Verdict::Checked
+            ));
+        }
+    }
+
+    /// Generated partial requests through the whole query target.
+    #[test]
+    fn query_target_smoke() {
+        let mut rng = rand::rngs::StdRng::seed_from_u64(0x5091_a0f1);
+        let (wanted, max_attempts) = (25, 4_000);
+        let mut verdicts = Vec::new();
+        let mut not_generated = 0;
+        for _ in 0..max_attempts {
+            let mut bytes = vec![0u8; 1 << 14];
+            rng.fill_bytes(&mut bytes);
+            let Ok(input) = SqlQueryFuzzTargetInput::arbitrary(&mut Unstructured::new(&bytes))
+            else {
+                not_generated += 1;
+                continue;
+            };
+            verdicts.push(check_query(&input));
+            if verdicts
+                .iter()
+                .filter(|v| matches!(v, Verdict::Checked))
+                .count()
+                >= wanted
+            {
+                break;
+            }
+        }
+        let (checked, skipped) = tally(verdicts);
+        eprintln!("checked {checked} inputs; skipped: {skipped:?}; not generated: {not_generated}");
+        assert!(
+            checked >= wanted,
+            "only {checked} of {wanted}; skipped: {skipped:?}"
+        );
+        assert!(
+            !skipped
+                .keys()
+                .any(|k| k.starts_with("benign") && !k.contains("NUL")),
+            "benign skips remain: {skipped:?}"
+        );
     }
 
     /// Generated inputs through the whole target, with the skip counts printed.
