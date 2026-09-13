@@ -360,11 +360,15 @@ impl ExprGenerator<'_> {
                         )),
                         // Binary comparisons expressions (>, >=, <, and <=)
                         4 => {
-                            let cmp_ty = uniform!(u,
-                                Type::long(),
-                                Type::datetime(),
-                                Type::duration()
-                            );
+                            let cmp_ty = if self.settings.enable_extensions {
+                                uniform!(u,
+                                    Type::long(),
+                                    Type::datetime(),
+                                    Type::duration()
+                                )
+                            } else {
+                                Type::long()
+                            };
                             let cmp_op = uniform!(u,
                                 ast::Expr::greater,
                                 ast::Expr::greatereq,

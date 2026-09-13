@@ -25,6 +25,7 @@ pub mod pst_equiv;
 pub mod pst_gen;
 pub mod roundtrip_entities;
 pub mod schemas;
+pub mod sql;
 pub mod symcc;
 pub mod symeval;
 pub mod tpe;

@@ -721,3 +721,9 @@ name = "tc-repair-equivalence"
 path = "fuzz_targets/tc-repair-equivalence.rs"
 test = false
 doc = false
+
+[[bin]]
+name = "sql-is-authorized-drt"
+path = "fuzz_targets/sql-is-authorized-drt.rs"
+test = false
+doc = false

@@ -1,6 +1,7 @@
 pub mod dump;
 pub mod logger;
 mod parsing_utils;
+pub mod sql_impl;
 pub mod tests;
 
 pub use parsing_utils::{

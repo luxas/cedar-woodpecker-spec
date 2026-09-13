@@ -72,6 +72,11 @@ pub struct ABACSettings {
     /// Flag to enable/disable generating actions in groups and declaring
     /// attributes on entity types.
     pub enable_action_groups_and_attrs: bool,
+    /// Flag to enable/disable the extension types (`ipaddr`, `decimal`,
+    /// `datetime`, `duration`) in generated schemas and expressions, and the
+    /// extension functions. Consumers that do not support extensions (the
+    /// `cedar-sql` targets) turn this off.
+    pub enable_extensions: bool,
     /// Flag to enable/disable generating arbitrary extension function calls.
     /// Note that this flag is only considered if `enable_extensions` is true.
     /// This flag should only be disabled for target `pp` because the parser now
@@ -103,6 +108,7 @@ impl ABACSettings {
             enable_additional_attributes: false,
             enable_like: true,
             enable_action_groups_and_attrs: true,
+            enable_extensions: true,
             enable_arbitrary_func_call: true,
             enable_unknowns: false,
             enable_action_in_constraints: true,

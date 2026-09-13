@@ -408,6 +408,14 @@ pub struct AvailableExtensionFunctions {
 impl AvailableExtensionFunctions {
     /// Create a new `AvailableExtensionFunctions` object based on the given `settings`
     pub fn create(settings: &ABACSettings) -> Self {
+        if !settings.enable_extensions {
+            return Self {
+                constructors: Vec::new(),
+                all: Vec::new(),
+                constructors_by_type: IndexMap::new(),
+                all_by_type: IndexMap::new(),
+            };
+        }
         let available_ext_funcs = vec![
             AvailableExtensionFunction {
                 name: Name::parse_unqualified_name("ip").expect("should be a valid identifier"),
