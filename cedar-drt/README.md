@@ -88,3 +88,12 @@ tar xzf corpus-tests.tar.gz
 cd ../../cedar-drt
 cargo test --features "integration-testing"
 ```
+
+The same corpus runs through `cedar-sql` (`tests/sql_integration_tests.rs`, needs `CEDAR_SQL_PG_URL`): every
+request of every test whose policies validate strictly and whose schema `cedar-sql` can store must give the
+expected decision, determining policies and erroring policies; the rest is tallied. A deterministic
+sixteenth of the corpus runs by default, all of it with `CEDAR_SQL_FULL_CORPUS=1`:
+
+```bash
+cargo test --features integration-testing --test sql_integration_tests -- --nocapture --test-threads=1
+```

@@ -96,3 +96,15 @@ jobs:
       - name: cargo test (cedar-drt/fuzz/)
         working-directory: ./cedar-spec/cedar-drt/fuzz
         run: source ~/.profile && source ../set_env_vars.sh && cargo test -- --nocapture
+      - name: checkout cedar-integration-tests
+        uses: actions/checkout@v7
+        with:
+          repository: cedar-policy/cedar-integration-tests
+          path: ./cedar-spec/cedar/cedar-integration-tests
+      - name: unpack the corpus tests
+        working-directory: ./cedar-spec/cedar/cedar-integration-tests
+        run: tar xzf corpus-tests.tar.gz
+      - name: cargo test (cedar-sql integration tests)
+        shell: bash
+        working-directory: ./cedar-spec/cedar-drt
+        run: source ~/.profile && source set_env_vars.sh && cargo test --features integration-testing --test sql_integration_tests -- --nocapture --test-threads=1
