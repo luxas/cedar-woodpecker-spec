@@ -94,7 +94,7 @@ fn run(path: &Path, tally: &mut Tally) {
                 tally.skip(format!("request: unsupported: {what}"));
                 continue;
             }
-            Err(SqlError::Load(message)) if message.contains("NUL") => {
+            Err(SqlError::Nul(_)) => {
                 tally.skip("request: a string with a NUL character");
                 continue;
             }

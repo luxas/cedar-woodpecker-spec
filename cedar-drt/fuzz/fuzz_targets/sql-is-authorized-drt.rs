@@ -27,6 +27,6 @@ fuzz_target!(|input: SqlFuzzTargetInput| {
     debug!("Schema: {}\n", input.schema.schemafile_string());
     debug!("Policy: {:?}\n", input.policy);
     debug!("Entities: {}\n", input.entities.as_ref());
-    let verdict = check_is_authorized(&input);
-    debug!("Verdict: {verdict:?}");
+    let outcome = check_is_authorized(&input);
+    debug!("Outcome: {outcome:?}");
 });
