@@ -27,6 +27,6 @@ fuzz_target!(|input: SqlQueryFuzzTargetInput| {
     debug!("Schema: {}\n", input.base.schema.schemafile_string());
     debug!("Policy: {:?}\n", input.base.policy);
     debug!("Entities: {}\n", input.base.entities.as_ref());
-    let verdict = check_query(&input);
-    debug!("Verdict: {verdict:?}");
+    let outcome = check_query(&input);
+    debug!("Outcome: {outcome:?}");
 });

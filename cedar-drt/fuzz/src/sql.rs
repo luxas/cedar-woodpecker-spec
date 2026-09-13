@@ -118,9 +118,9 @@ impl<'a> Arbitrary<'a> for SqlFuzzTargetInput {
 }
 
 /// The `sql-is-authorized-drt` check on one generated input.
-pub fn check_is_authorized(input: &SqlFuzzTargetInput) -> Verdict {
+pub fn check_is_authorized(input: &SqlFuzzTargetInput) -> Outcome {
     let Ok(schema) = Schema::try_from(input.schema.clone()) else {
-        return Skip::OutsideEnvelope("the schema does not convert".into()).into();
+        return Outcome::skipped(Skip::OutsideEnvelope("the schema does not convert".into()));
     };
     // Partial evaluation takes static policies: a generated template is linked.
     let mut policies = PolicySet::new();
@@ -170,7 +170,9 @@ fn classify(
     match error {
         SqlError::Unsupported(what) => Ok(Skip::Benign(what.to_owned())),
         // Postgres `text` cannot hold NUL: a documented limitation, skipped.
-        SqlError::Load(message) if message.contains("NUL") => Ok(Skip::Benign(message)),
+        SqlError::Nul(s) => Ok(Skip::Benign(format!(
+            "a string with a NUL character: {s:?}"
+        ))),
         e if e.is_timeout() => Err(Skip::Timeout),
         e => panic!(
             "cedar-sql failed for {request}\nPolicies:\n{policies}\nEntities:\n{}\nError: {e}",
@@ -179,21 +181,43 @@ fn classify(
     }
 }
 
-/// The verdict of a batch of per-request outcomes: checked if any request
-/// was, else the first skip.
-fn verdict(checked: usize, skips: Vec<Skip>) -> Verdict {
-    if checked > 0 {
-        return Verdict::Checked;
+/// What a differential check did with one input: how many requests it
+/// checked, why the others were skipped, and notes (a cross-check that
+/// could not run).
+#[derive(Debug, Default)]
+pub struct Outcome {
+    /// Requests checked.
+    pub checked: usize,
+    /// Per-request (or per-input) skips.
+    pub skips: Vec<Skip>,
+    /// Cross-checks that could not run, with the reason.
+    pub notes: Vec<String>,
+}
+
+impl Outcome {
+    fn skipped(skip: Skip) -> Self {
+        Self {
+            skips: vec![skip],
+            ..Self::default()
+        }
     }
-    let benign = skips.iter().position(|s| matches!(s, Skip::Benign(_)));
-    let mut skips = skips;
-    match benign {
-        Some(i) => skips.swap_remove(i).into(),
-        None => skips
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| Skip::OutsideEnvelope("no request".to_owned()))
-            .into(),
+
+    /// The input-level verdict: checked if any request was, else the first
+    /// benign skip, else the first skip.
+    pub fn verdict(self) -> Verdict {
+        if self.checked > 0 {
+            return Verdict::Checked;
+        }
+        let benign = self.skips.iter().position(|s| matches!(s, Skip::Benign(_)));
+        let mut skips = self.skips;
+        match benign {
+            Some(i) => skips.swap_remove(i).into(),
+            None => skips
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| Skip::OutsideEnvelope("no request".to_owned()))
+                .into(),
+        }
     }
 }
 
@@ -229,18 +253,17 @@ pub fn compare(
     entities: &Entities,
     requests: &[Request],
     hierarchy_closed: bool,
-) -> Verdict {
+) -> Outcome {
     let sql = match setup(schema, policies, hierarchy_closed) {
         Ok(sql) => sql,
-        Err(skip) => return skip.into(),
+        Err(skip) => return Outcome::skipped(skip),
     };
     let validator = Validator::new(schema.clone());
     let authorizer = Authorizer::new();
-    let mut checked = 0;
-    let mut skips = Vec::new();
+    let mut outcome = Outcome::default();
     for request in requests {
         if !crate::tpe::passes_request_validation(&validator, request) {
-            skips.push(Skip::OutsideEnvelope(
+            outcome.skips.push(Skip::OutsideEnvelope(
                 "the request does not validate".into(),
             ));
             continue;
@@ -249,10 +272,10 @@ pub fn compare(
             Ok(response) => response,
             Err(e) => match classify(e, request, policies, entities) {
                 Ok(skip) => {
-                    skips.push(skip);
+                    outcome.skips.push(skip);
                     continue;
                 }
-                Err(skip) => return skip.into(),
+                Err(skip) => return Outcome::skipped(skip),
             },
         };
         let (decision, reason, errors) = expected(&authorizer, request, policies, entities);
@@ -262,9 +285,9 @@ pub fn compare(
             "cedar-sql disagrees with cedar-policy for {request}\nPolicies:\n{policies}\nEntities:\n{}",
             entities.as_ref()
         );
-        checked += 1;
+        outcome.checked += 1;
     }
-    verdict(checked, skips)
+    outcome
 }
 
 /// Which request variables a partial request leaves unknown.
@@ -319,9 +342,9 @@ impl<'a> Arbitrary<'a> for SqlQueryFuzzTargetInput {
 }
 
 /// The `sql-query-drt` check on one generated input.
-pub fn check_query(input: &SqlQueryFuzzTargetInput) -> Verdict {
+pub fn check_query(input: &SqlQueryFuzzTargetInput) -> Outcome {
     let Ok(schema) = Schema::try_from(input.base.schema.clone()) else {
-        return Skip::OutsideEnvelope("the schema does not convert".into()).into();
+        return Outcome::skipped(Skip::OutsideEnvelope("the schema does not convert".into()));
     };
     let mut policies = PolicySet::new();
     policies
@@ -355,18 +378,17 @@ pub fn compare_query(
     entities: &Entities,
     requests: &[(Request, Unknowns)],
     hierarchy_closed: bool,
-) -> Verdict {
+) -> Outcome {
     let sql = match setup(schema, policies, hierarchy_closed) {
         Ok(sql) => sql,
-        Err(skip) => return skip.into(),
+        Err(skip) => return Outcome::skipped(skip),
     };
     let validator = Validator::new(schema.clone());
     let authorizer = Authorizer::new();
-    let mut checked = 0;
-    let mut skips = Vec::new();
+    let mut outcome = Outcome::default();
     for (request, unknowns) in requests {
         if !crate::tpe::passes_request_validation(&validator, request) {
-            skips.push(Skip::OutsideEnvelope(
+            outcome.skips.push(Skip::OutsideEnvelope(
                 "the request does not validate".into(),
             ));
             continue;
@@ -382,10 +404,10 @@ pub fn compare_query(
             Ok(rows) => rows,
             Err(e) => match classify(e, request, policies, entities) {
                 Ok(skip) => {
-                    skips.push(skip);
+                    outcome.skips.push(skip);
                     continue;
                 }
-                Err(skip) => return skip.into(),
+                Err(skip) => return Outcome::skipped(skip),
             },
         };
         let principal = request.principal().expect("concrete");
@@ -456,7 +478,10 @@ pub fn compare_query(
                 }
             })
             .collect();
-        let query_allowed: Option<BTreeSet<String>> = match unknowns {
+        // A permission query that cannot be built (an invalid request
+        // environment) or answered (dangling references fail its entity
+        // validation) is noted, so that a vacuous cross-check is visible.
+        let query_allowed: Result<Option<BTreeSet<String>>, String> = match unknowns {
             Unknowns::Resource => ResourceQueryRequest::new(
                 principal.clone(),
                 action.clone(),
@@ -464,13 +489,13 @@ pub fn compare_query(
                 context.clone(),
                 validator.schema(),
             )
-            .ok()
+            .map_err(|e| e.to_string())
             .and_then(|q| {
                 policies
                     .query_resource(&q, entities, validator.schema())
-                    .ok()
+                    .map_err(|e| e.to_string())
             })
-            .map(|uids| uids.map(|u| u.to_string()).collect()),
+            .map(|uids| Some(uids.map(|u| u.to_string()).collect())),
             Unknowns::Principal => PrincipalQueryRequest::new(
                 principal.type_name().clone(),
                 action.clone(),
@@ -478,43 +503,49 @@ pub fn compare_query(
                 context.clone(),
                 validator.schema(),
             )
-            .ok()
+            .map_err(|e| e.to_string())
             .and_then(|q| {
                 policies
                     .query_principal(&q, entities, validator.schema())
-                    .ok()
+                    .map_err(|e| e.to_string())
             })
-            .map(|uids| uids.map(|u| u.to_string()).collect()),
-            Unknowns::Both => None,
+            .map(|uids| Some(uids.map(|u| u.to_string()).collect())),
+            Unknowns::Both => Ok(None),
         };
-        if let Some(query_allowed) = query_allowed {
-            assert_eq!(
+        match query_allowed {
+            Ok(Some(query_allowed)) => assert_eq!(
                 allowed, query_allowed,
                 "cedar-sql's allowed set disagrees with the permission query for {request} with {unknowns:?}\nPolicies:\n{policies}"
-            );
+            ),
+            Ok(None) => {}
+            Err(why) => outcome
+                .notes
+                .push(format!("permission query unavailable: {why}")),
         }
-        checked += 1;
+        outcome.checked += 1;
     }
-    verdict(checked, skips)
+    outcome
 }
 
-/// The skip reasons of a batch of verdicts (kind and message), for smoke tests.
-pub fn tally(verdicts: impl IntoIterator<Item = Verdict>) -> (usize, BTreeMap<String, usize>) {
+/// The requests checked and the skip reasons (kind and message, per request)
+/// and notes of a batch of outcomes, for smoke tests.
+pub fn tally(outcomes: impl IntoIterator<Item = Outcome>) -> (usize, BTreeMap<String, usize>) {
     let mut checked = 0;
     let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
-    for verdict in verdicts {
-        match verdict {
-            Verdict::Checked => checked += 1,
-            Verdict::Skipped(skip) => {
-                let key = match skip {
-                    Skip::OutsideEnvelope(m) => format!("outside envelope: {m}"),
-                    Skip::NotWellTyped(m) => format!("not well typed: {m}"),
-                    Skip::Benign(m) => format!("benign: {m}"),
-                    Skip::Timeout => "timeout".to_owned(),
-                    Skip::Unknown => "unknown".to_owned(),
-                };
-                *skipped.entry(key).or_default() += 1;
-            }
+    for outcome in outcomes {
+        checked += outcome.checked;
+        for skip in outcome.skips {
+            let key = match skip {
+                Skip::OutsideEnvelope(m) => format!("outside envelope: {m}"),
+                Skip::NotWellTyped(m) => format!("not well typed: {m}"),
+                Skip::Benign(m) => format!("benign: {m}"),
+                Skip::Timeout => "timeout".to_owned(),
+                Skip::Unknown => "unknown".to_owned(),
+            };
+            *skipped.entry(key).or_default() += 1;
+        }
+        for note in outcome.notes {
+            *skipped.entry(format!("note: {note}")).or_default() += 1;
         }
     }
     (checked, skipped)
@@ -578,10 +609,8 @@ mod tests {
             request("User::\"luxas\"", "Document::\"nope\""),
         ];
         for closed in [true, false] {
-            assert!(matches!(
-                compare(&schema, &policies, &entities, &requests, closed),
-                Verdict::Checked
-            ));
+            let outcome = compare(&schema, &policies, &entities, &requests, closed);
+            assert_eq!(outcome.checked, requests.len(), "{outcome:?}");
         }
     }
 
@@ -600,7 +629,7 @@ mod tests {
         )
         .unwrap();
         let requests = [request("User::\"luxas\"", "User::\"luxas\"")];
-        match compare(&schema, &policies, &entities, &requests, true) {
+        match compare(&schema, &policies, &entities, &requests, true).verdict() {
             Verdict::Skipped(Skip::Benign(what)) => assert_eq!(what, "extension types"),
             other => panic!("expected a benign skip, got {other:?}"),
         }
@@ -632,10 +661,9 @@ mod tests {
             ),
         ];
         for closed in [true, false] {
-            assert!(matches!(
-                compare_query(&schema, &policies, &entities, &requests, closed),
-                Verdict::Checked
-            ));
+            let outcome = compare_query(&schema, &policies, &entities, &requests, closed);
+            assert_eq!(outcome.checked, requests.len(), "{outcome:?}");
+            assert!(outcome.notes.is_empty(), "{outcome:?}");
         }
     }
 
@@ -655,12 +683,7 @@ mod tests {
                 continue;
             };
             verdicts.push(check_query(&input));
-            if verdicts
-                .iter()
-                .filter(|v| matches!(v, Verdict::Checked))
-                .count()
-                >= wanted
-            {
+            if verdicts.iter().filter(|o| o.checked > 0).count() >= wanted {
                 break;
             }
         }
@@ -693,11 +716,7 @@ mod tests {
                 continue;
             };
             verdicts.push(check_is_authorized(&input));
-            let checked = verdicts
-                .iter()
-                .filter(|v| matches!(v, Verdict::Checked))
-                .count();
-            if checked >= wanted {
+            if verdicts.iter().filter(|o| o.checked > 0).count() >= wanted {
                 break;
             }
         }
