@@ -254,27 +254,39 @@ pub fn arbitrary_schematype_with_bounded_depth<N: From<ast::Name>>(
         }
     };
 
-    let ty = uniform!(
-        u,
-        json_schema::TypeVariant::String,
-        json_schema::TypeVariant::Long,
-        json_schema::TypeVariant::Boolean,
-        set(u)?,
-        record(u)?,
-        entity_type_name_to_schema_type_variant::<N>(u.choose(entity_types)?),
-        json_schema::TypeVariant::Extension {
-            name: "ipaddr".parse().unwrap(),
-        },
-        json_schema::TypeVariant::Extension {
-            name: "decimal".parse().unwrap(),
-        },
-        json_schema::TypeVariant::Extension {
-            name: "datetime".parse().unwrap(),
-        },
-        json_schema::TypeVariant::Extension {
-            name: "duration".parse().unwrap(),
-        }
-    );
+    let ty = if settings.enable_extensions {
+        uniform!(
+            u,
+            json_schema::TypeVariant::String,
+            json_schema::TypeVariant::Long,
+            json_schema::TypeVariant::Boolean,
+            set(u)?,
+            record(u)?,
+            entity_type_name_to_schema_type_variant::<N>(u.choose(entity_types)?),
+            json_schema::TypeVariant::Extension {
+                name: "ipaddr".parse().unwrap(),
+            },
+            json_schema::TypeVariant::Extension {
+                name: "decimal".parse().unwrap(),
+            },
+            json_schema::TypeVariant::Extension {
+                name: "datetime".parse().unwrap(),
+            },
+            json_schema::TypeVariant::Extension {
+                name: "duration".parse().unwrap(),
+            }
+        )
+    } else {
+        uniform!(
+            u,
+            json_schema::TypeVariant::String,
+            json_schema::TypeVariant::Long,
+            json_schema::TypeVariant::Boolean,
+            set(u)?,
+            record(u)?,
+            entity_type_name_to_schema_type_variant::<N>(u.choose(entity_types)?)
+        )
+    };
 
     Ok(json_schema::Type::Type { ty, loc: None })
 }

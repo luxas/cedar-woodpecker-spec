@@ -38,9 +38,34 @@ pub struct TypeGenerator<'a> {
 impl TypeGenerator<'_> {
     /// Generate an arbitrary type, respecting `max_depth` and `max_width`
     pub fn generate_type(&self, max_depth: usize, u: &mut Unstructured<'_>) -> Result<Type> {
+        let ext = self.settings.enable_extensions;
         if max_depth == 0 {
             // Reached max-depth, so no recursion. Record types are empty and
             // skips generating set types entirely. All other types generated.
+            if ext {
+                uniform!(
+                    u,
+                    Ok(Type::bool()),
+                    Ok(Type::long()),
+                    Ok(Type::string()),
+                    Ok(Type::ipaddr()),
+                    Ok(Type::decimal()),
+                    Ok(Type::datetime()),
+                    Ok(Type::duration()),
+                    Ok(Type::entity(self.schema.arbitrary_entity_type(u)?,)),
+                    Ok(Type::record([]))
+                )
+            } else {
+                uniform!(
+                    u,
+                    Ok(Type::bool()),
+                    Ok(Type::long()),
+                    Ok(Type::string()),
+                    Ok(Type::entity(self.schema.arbitrary_entity_type(u)?,)),
+                    Ok(Type::record([]))
+                )
+            }
+        } else if ext {
             uniform!(
                 u,
                 Ok(Type::bool()),
@@ -51,7 +76,8 @@ impl TypeGenerator<'_> {
                 Ok(Type::datetime()),
                 Ok(Type::duration()),
                 Ok(Type::entity(self.schema.arbitrary_entity_type(u)?,)),
-                Ok(Type::record([]))
+                Ok(Type::set_of(self.generate_type(max_depth - 1, u)?)),
+                self.generate_record_type(max_depth, u)
             )
         } else {
             uniform!(
@@ -59,10 +85,6 @@ impl TypeGenerator<'_> {
                 Ok(Type::bool()),
                 Ok(Type::long()),
                 Ok(Type::string()),
-                Ok(Type::ipaddr()),
-                Ok(Type::decimal()),
-                Ok(Type::datetime()),
-                Ok(Type::duration()),
                 Ok(Type::entity(self.schema.arbitrary_entity_type(u)?,)),
                 Ok(Type::set_of(self.generate_type(max_depth - 1, u)?)),
                 self.generate_record_type(max_depth, u)
