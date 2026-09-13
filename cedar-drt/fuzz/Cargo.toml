@@ -23,6 +23,7 @@ cedar-testing = { path = "../../cedar/cedar-testing", version = "4.4.0" }
 cedar-policy-generators = { path = "../../cedar-policy-generators", version = "4.0.0", features = [
     "cedar-policy",
 ] }
+cedar-sql = { path = "../../cedar-sql", version = "0.1.0", features = ["testing"] }
 log = "0.4"
 logos = "0.16.0"
 itertools = "0.15.0"

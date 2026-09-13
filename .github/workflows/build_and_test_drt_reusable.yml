@@ -20,6 +20,21 @@ jobs:
       matrix:
         toolchain:
           - stable
+    services:
+      # For the cedar-sql differential tests (`CEDAR_SQL_PG_URL` below).
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      CEDAR_SQL_PG_URL: postgres://postgres@localhost:5432/postgres
     steps:
       - name: Free up disk space
         run: |
@@ -39,6 +54,11 @@ jobs:
           repository: cedar-policy/cedar
           path: ./cedar-spec/cedar
           ref: ${{ inputs.cedar_policy_ref }}
+      - name: checkout cedar-sql
+        uses: actions/checkout@v7
+        with:
+          repository: luxas/cedar-sql
+          path: ./cedar-spec/cedar-sql
       - name: Install Lean
         shell: bash
         run: |
