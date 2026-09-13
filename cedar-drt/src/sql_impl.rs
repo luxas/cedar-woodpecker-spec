@@ -26,7 +26,7 @@ use std::collections::HashMap;
 use cedar_policy::{
     Entities, EvalResult, Expression, PolicySet, Request, Schema, ValidationMode, ffi,
 };
-use cedar_sql::authorizer::{Response, SqlAuthorizer};
+use cedar_sql::authorizer::{QueryRow, Response, SqlAuthorizer, action_entities, partial_request};
 use cedar_sql::backend::Backend;
 use cedar_sql::backend::postgres::PgBackend;
 use cedar_sql::config::DatabaseConfiguration;
@@ -54,12 +54,14 @@ pub struct SqlTestImpl {
 impl SqlTestImpl {
     /// The default mapping of `schema` (over-long generated names shortened),
     /// without foreign keys (Cedar data may reference entities that do not
-    /// exist) and with the hierarchy table holding the closure (which the
-    /// loader stores).
-    pub fn new(schema: Schema) -> Result<Self, cedar_sql::Error> {
+    /// exist); `hierarchy_closed` selects the closed-table `in` or the
+    /// recursive ancestors CTE.
+    pub fn new(schema: Schema, hierarchy_closed: bool) -> Result<Self, cedar_sql::Error> {
         let mut config = DatabaseConfiguration::from_schema_shortening_names(&schema)?;
         config.emit_foreign_keys = false;
-        config.hierarchy_closed = true;
+        // The loader stores the closure, so both modes are correct; the
+        // recursive CTE is exercised when `hierarchy_closed` is off.
+        config.hierarchy_closed = hierarchy_closed;
         let db = SharedPostgres::get()?.connect()?;
         Ok(Self {
             schema,
@@ -113,6 +115,24 @@ impl SqlTestImpl {
         self.with_loaded(entities, |db| {
             authorizer.is_authorized(db, request, entities)
         })
+    }
+}
+
+impl SqlTestImpl {
+    /// Authorizes `request` with its principal and/or resource id dropped:
+    /// one row per candidate entity (pair) in `entities`.
+    pub fn query(
+        &self,
+        request: &Request,
+        unknown_principal: bool,
+        unknown_resource: bool,
+        policies: &PolicySet,
+        entities: &Entities,
+    ) -> Result<Vec<QueryRow>, cedar_sql::Error> {
+        let authorizer = SqlAuthorizer::new(&self.schema, &self.config, &Postgres, policies)?;
+        let partial = partial_request(request, unknown_principal, unknown_resource, &self.schema)?;
+        let actions = action_entities(entities, &self.schema)?;
+        self.with_loaded(entities, |db| authorizer.query(db, &partial, &actions))
     }
 }
 

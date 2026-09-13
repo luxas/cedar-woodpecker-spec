@@ -925,6 +925,11 @@ impl ExprGenerator<'_> {
         max_depth: usize,
         u: &mut Unstructured<'_>,
     ) -> Result<ast::Expr> {
+        if !self.settings.enable_extensions {
+            // No extension function is available: a literal of the type
+            // instead, so that the input survives.
+            return self.generate_expr_for_type_structurally_recursive(target_type, u);
+        }
         let func = self.ext_funcs.arbitrary_for_type(target_type, u)?;
         assert_eq!(&func.return_ty, target_type);
         let mut args: Vec<ast::Expr> = func
