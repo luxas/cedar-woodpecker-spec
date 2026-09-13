@@ -31,3 +31,4 @@ cedar-drt/fuzz_reports
 # not track it in version control.
 cedar/
 !cedar-lean/Cedar
+cedar-sql/
