@@ -25,7 +25,7 @@
 //! benign skips, so the target lands before every operator is compiled and
 //! the skip counts show what is left.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
 use cedar_drt::sql_impl::SqlTestImpl;
 use cedar_drt::tests::drop_some_entities;
@@ -43,13 +43,12 @@ use libfuzzer_sys::arbitrary::{self, Arbitrary, Error, MaxRecursionReached, Unst
 use crate::schemas;
 pub use crate::symeval::{Skip, Verdict};
 
-/// The generator settings: type-directed, small, no extension types (not
-/// stored yet) and no `like` (compiled since Plan 3, exercised from Plan 4).
+/// The generator settings: type-directed, small, and no extension types
+/// (not stored yet).
 pub const SETTINGS: ABACSettings = ABACSettings {
     max_depth: 3,
     max_width: 3,
     enable_extensions: false,
-    enable_like: false,
     ..ABACSettings::type_directed()
 };
 
@@ -164,7 +163,8 @@ pub fn compare(
                 benign = Some(what.to_owned());
                 continue;
             }
-            Err(SqlError::Load(message)) => {
+            // Postgres `text` cannot hold NUL: a documented limitation, skipped.
+            Err(SqlError::Load(message)) if message.contains("NUL") => {
                 benign = Some(message);
                 continue;
             }
@@ -204,20 +204,20 @@ pub fn compare(
     }
 }
 
-/// The skip kinds of a batch of verdicts, for smoke tests.
-pub fn tally(verdicts: impl IntoIterator<Item = Verdict>) -> (usize, HashMap<&'static str, usize>) {
+/// The skip reasons of a batch of verdicts (kind and message), for smoke tests.
+pub fn tally(verdicts: impl IntoIterator<Item = Verdict>) -> (usize, BTreeMap<String, usize>) {
     let mut checked = 0;
-    let mut skipped: HashMap<&'static str, usize> = HashMap::new();
+    let mut skipped: BTreeMap<String, usize> = BTreeMap::new();
     for verdict in verdicts {
         match verdict {
             Verdict::Checked => checked += 1,
             Verdict::Skipped(skip) => {
                 let key = match skip {
-                    Skip::OutsideEnvelope(_) => "outside envelope",
-                    Skip::NotWellTyped(_) => "not well typed",
-                    Skip::Benign(_) => "benign",
-                    Skip::Timeout => "timeout",
-                    Skip::Unknown => "unknown",
+                    Skip::OutsideEnvelope(m) => format!("outside envelope: {m}"),
+                    Skip::NotWellTyped(m) => format!("not well typed: {m}"),
+                    Skip::Benign(m) => format!("benign: {m}"),
+                    Skip::Timeout => "timeout".to_owned(),
+                    Skip::Unknown => "unknown".to_owned(),
                 };
                 *skipped.entry(key).or_default() += 1;
             }
@@ -289,18 +289,23 @@ mod tests {
         ));
     }
 
-    /// A set operation is not compiled yet: a benign skip, not a failure.
+    /// A construct `cedar-sql` does not support (an extension type) is a
+    /// benign skip, not a failure.
     #[test]
     fn unsupported_is_benign() {
-        let schema = Schema::from_cedarschema_str(SCHEMA).unwrap().0;
-        let entities = Entities::from_json_str(ENTITIES, Some(&schema)).unwrap();
+        let schema = Schema::from_cedarschema_str(
+            r#"entity User = { ip: ipaddr }; action "get" appliesTo { principal: [User], resource: [User] };"#,
+        )
+        .unwrap()
+        .0;
+        let entities = Entities::from_json_str("[]", Some(&schema)).unwrap();
         let policies = PolicySet::from_str(
-            r#"permit(principal, action, resource) when { principal.groups.contains("a") };"#,
+            r#"permit(principal, action, resource) when { principal.ip.isLoopback() };"#,
         )
         .unwrap();
-        let requests = [request("User::\"luxas\"", "Document::\"d1\"")];
+        let requests = [request("User::\"luxas\"", "User::\"luxas\"")];
         match compare(&schema, &policies, &entities, &requests) {
-            Verdict::Skipped(Skip::Benign(what)) => assert_eq!(what, "set operations"),
+            Verdict::Skipped(Skip::Benign(what)) => assert_eq!(what, "extension types"),
             other => panic!("expected a benign skip, got {other:?}"),
         }
     }
@@ -333,6 +338,14 @@ mod tests {
         assert!(
             checked >= wanted,
             "only {checked} of {wanted} wanted inputs were checked; skipped: {skipped:?}"
+        );
+        // Every construct the generators produce without extensions compiles;
+        // only strings with NUL characters (which Postgres cannot store) are skipped.
+        assert!(
+            !skipped
+                .keys()
+                .any(|k| k.starts_with("benign") && !k.contains("NUL")),
+            "benign skips remain: {skipped:?}"
         );
     }
 }

@@ -52,11 +52,12 @@ pub struct SqlTestImpl {
 }
 
 impl SqlTestImpl {
-    /// The default mapping of `schema`, without foreign keys (Cedar data may
-    /// reference entities that do not exist) and with the hierarchy table
-    /// holding the closure (which the loader stores).
+    /// The default mapping of `schema` (over-long generated names shortened),
+    /// without foreign keys (Cedar data may reference entities that do not
+    /// exist) and with the hierarchy table holding the closure (which the
+    /// loader stores).
     pub fn new(schema: Schema) -> Result<Self, cedar_sql::Error> {
-        let mut config = DatabaseConfiguration::from_schema(&schema)?;
+        let mut config = DatabaseConfiguration::from_schema_shortening_names(&schema)?;
         config.emit_foreign_keys = false;
         config.hierarchy_closed = true;
         let db = SharedPostgres::get()?.connect()?;
